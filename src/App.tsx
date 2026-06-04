@@ -24,19 +24,25 @@ import {
   X, 
   Zap,
   Eye,
-  Lock
+  Lock,
+  Table
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { ErrorRecord, ChatMessage, RolePermissions, AppPermissionsConfig, UserAccount } from "./types";
-import { auth, googleProvider } from "./firebase";
-import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
+import { auth, googleProvider, db } from "./firebase";
+import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser, GoogleAuthProvider } from "firebase/auth";
+import { doc, getDoc, setDoc } from "firebase/firestore";
+
+import AttachmentsSpace from "./AttachmentsSpace";
+import DatatableSpace from "./DatatableSpace";
 
 export default function App() {
   // Navigation & View state
-  const [activeTab, setActiveTab] = useState<"catalog" | "chat" | "add" | "webview">("catalog");
+  const [activeTab, setActiveTab] = useState<"catalog" | "chat" | "add" | "attachments" | "datatable" | "webview">("catalog");
   
   // Data State
   const [errors, setErrors] = useState<ErrorRecord[]>([]);
+  const [errorDisplayType, setErrorDisplayType] = useState<"resolved" | "unresolved">("unresolved");
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -46,15 +52,10 @@ export default function App() {
 
   // Authentication & Member Access State
   const [firebaseUser, setFirebaseUser] = useState<any | null>(null);
-  const [isPinAuthenticated, setIsPinAuthenticated] = useState<boolean>(() => {
-    return localStorage.getItem("sb_pin_authenticated") === "true";
-  });
-  const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError] = useState("");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authPurpose, setAuthPurpose] = useState<"add" | "edit" | "delete" | "general">("general");
 
-  const isLoggedIn = !!firebaseUser || isPinAuthenticated;
+  const isLoggedIn = !!firebaseUser;
 
   // Dynamic Permissions Configuration & Access Control
   const DEFAULT_PERMISSIONS: AppPermissionsConfig = {
@@ -66,7 +67,10 @@ export default function App() {
       allowEditSolution: true,
       allowDeleteError: false,
       allowUseAI: true,
-      allowChatActions: true
+      allowChatActions: true,
+      allowRecentErrors: true,
+      allowAttachmentsSpace: true,
+      allowDatatable: false
     },
     publicUser: {
       allowCatalogTab: true,
@@ -76,7 +80,23 @@ export default function App() {
       allowEditSolution: false,
       allowDeleteError: false,
       allowUseAI: true,
-      allowChatActions: true
+      allowChatActions: true,
+      allowRecentErrors: false,
+      allowAttachmentsSpace: false,
+      allowDatatable: false
+    },
+    inviteUser: {
+      allowCatalogTab: true,
+      allowChatTab: true,
+      allowAddTab: true,
+      allowAddError: false,
+      allowEditSolution: false,
+      allowDeleteError: false,
+      allowUseAI: true,
+      allowChatActions: true,
+      allowRecentErrors: true,
+      allowAttachmentsSpace: true,
+      allowDatatable: false
     }
   };
 
@@ -91,6 +111,9 @@ export default function App() {
   const getPermission = (key: keyof RolePermissions): boolean => {
     if (isSuperAdmin) return true; // Super Admin has ultimate power
     if (isLoggedIn) {
+      if (firebaseUser?.customRole === "inviteUser") {
+        return permissionsConfig?.inviteUser?.[key] ?? DEFAULT_PERMISSIONS.inviteUser[key];
+      }
       return permissionsConfig?.ilivikUsers?.[key] ?? DEFAULT_PERMISSIONS.ilivikUsers[key];
     } else {
       return permissionsConfig?.publicUser?.[key] ?? DEFAULT_PERMISSIONS.publicUser[key];
@@ -110,6 +133,8 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Email/Password login modal states
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [loginName, setLoginName] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
@@ -130,7 +155,7 @@ export default function App() {
   const [userFormEmail, setUserFormEmail] = useState("");
   const [userFormName, setUserFormName] = useState("");
   const [userFormPassword, setUserFormPassword] = useState("");
-  const [userFormStatus, setUserFormStatus] = useState<"active" | "disabled">("active");
+  const [userFormStatus, setUserFormStatus] = useState<"active" | "disabled" | "pending">("active");
   const [userFormRole, setUserFormRole] = useState("ilivikUsers");
   const [userFetchError, setUserFetchError] = useState<string | null>(null);
   const [userFormSuccess, setUserFormSuccess] = useState<string | null>(null);
@@ -168,9 +193,12 @@ export default function App() {
     
     setIsSubmitting(true);
     try {
+      const hasSolution = solutionInput.trim().length > 0;
       const updatedRecord: ErrorRecord = {
         ...viewingErrorDetail,
         solution: solutionInput.trim(),
+        isResolved: hasSolution,
+        resolvedAt: hasSolution ? (viewingErrorDetail.resolvedAt || new Date().toISOString()) : null,
       };
 
       const response = await fetch(`/api/errors/${viewingErrorDetail.id}`, {
@@ -202,7 +230,7 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (fUser) => {
       if (fUser) {
         if (fUser.email && !fUser.email.toLowerCase().endsWith("@ilivik.com")) {
-          setPinError("Accès refusé : Seuls les e-mails de domaine @ilivik.com de l'équipe Ilivik sont autorisés.");
+          setLoginError("Accès refusé : Seuls les e-mails de domaine @ilivik.com de l'équipe Ilivik sont autorisés.");
           setAuthPurpose("general");
           setShowAuthModal(true);
           try {
@@ -211,13 +239,73 @@ export default function App() {
             console.error("Signout error:", e);
           }
           setFirebaseUser(null);
-          if (!isPinAuthenticated) {
-            setCurrentUser("Team Ilivik Membre");
-            setFormAuthor("Team Ilivik Membre");
-            localStorage.removeItem("sb_support_user");
-          }
+          setCurrentUser("Team Ilivik Membre");
+          setFormAuthor("Team Ilivik Membre");
+          localStorage.removeItem("sb_support_user");
           return;
         }
+
+        // Role & Status validation for @ilivik.com users
+        if (fUser.email) {
+          try {
+            const emailKey = fUser.email.toLowerCase().trim();
+            const userDocRef = doc(db, "users", emailKey);
+            const userSnap = await getDoc(userDocRef);
+            
+            if (emailKey === "hichem.b@ilivik.com") {
+              // Superadmin is always allowed, auto-create if missing
+              if (!userSnap.exists()) {
+                await setDoc(userDocRef, {
+                  name: fUser.displayName || "Hichem B. (Super Admin)",
+                  email: emailKey,
+                  password: "admin",
+                  status: "active",
+                  role: "ilivikUsers",
+                  createdAt: new Date().toISOString()
+                });
+              }
+            } else {
+              if (!userSnap.exists()) {
+                 // Create pending user
+                 await setDoc(userDocRef, {
+                   name: fUser.displayName || "Membre Team Ilivik",
+                   email: emailKey,
+                   password: "google_sso",
+                   status: "pending",
+                   role: "ilivikUsers",
+                   createdAt: new Date().toISOString()
+                 });
+                 setLoginError("Votre compte est en attente de validation par le Super-Administrateur.");
+                 setAuthPurpose("general");
+                 setShowAuthModal(true);
+                 await signOut(auth);
+                 setFirebaseUser(null);
+                 return;
+              } else {
+                 const userData = userSnap.data();
+                 if (userData.status === "pending") {
+                   setLoginError("Votre compte est toujours en attente de validation.");
+                   setAuthPurpose("general");
+                   setShowAuthModal(true);
+                   await signOut(auth);
+                   setFirebaseUser(null);
+                   return;
+                 }
+                 if (userData.status === "disabled") {
+                   setLoginError("Votre compte a été suspendu par le Super-Administrateur.");
+                   setAuthPurpose("general");
+                   setShowAuthModal(true);
+                   await signOut(auth);
+                   setFirebaseUser(null);
+                   return;
+                 }
+              }
+            }
+          } catch (e) {
+            console.error("Error validating user status:", e);
+          }
+        }
+
         setFirebaseUser(fUser);
         const displayName = fUser.displayName || fUser.email || "Membre Team Ilivik";
         setCurrentUser(displayName);
@@ -225,16 +313,13 @@ export default function App() {
         localStorage.setItem("sb_support_user", displayName);
       } else {
         setFirebaseUser(null);
-        // If logged out from Firebase and not PIN authenticated, reset user name
-        if (!isPinAuthenticated) {
-          setCurrentUser("Team Ilivik Membre");
-          setFormAuthor("Team Ilivik Membre");
-          localStorage.removeItem("sb_support_user");
-        }
+        setCurrentUser("Team Ilivik Membre");
+        setFormAuthor("Team Ilivik Membre");
+        localStorage.removeItem("sb_support_user");
       }
     });
     return unsubscribe;
-  }, [isPinAuthenticated]);
+  }, []);
 
   // Retrieve errors Catalog & Custom Permissions on mount
   useEffect(() => {
@@ -319,11 +404,18 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     try {
-      setPinError("");
+      setLoginError("");
       const result = await signInWithPopup(auth, googleProvider);
+      
+      // Cache Google Workspace Access Token in window object for easy access
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (credential?.accessToken) {
+        (window as any).__GOOGLE_ACCESS_TOKEN__ = credential.accessToken;
+      }
+      
       const user = result.user;
       if (user.email && !user.email.toLowerCase().endsWith("@ilivik.com")) {
-        setPinError("Accès refusé : Seuls les e-mails du domaine @ilivik.com de l'équipe Ilivik sont autorisés.");
+        setLoginError("Accès refusé : Seuls les e-mails du domaine @ilivik.com de l'équipe Ilivik sont autorisés.");
         try {
           await signOut(auth);
         } catch (e) {
@@ -335,71 +427,75 @@ export default function App() {
       setShowAuthModal(false);
     } catch (err: any) {
       console.error("Firebase Login Error:", err);
-      setPinError("Échec de la connexion Google. Vous pouvez utiliser le code de connexion Équipe.");
+      setLoginError("Échec de la connexion Google.");
     }
   };
 
   const handleCustomEmailPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
-    const email = loginEmail.trim();
+    const rawEmail = loginEmail.trim();
+    const email = rawEmail.includes("@") ? rawEmail : `${rawEmail}@ilivik.com`;
     const password = loginPassword.trim();
+    const name = loginName.trim();
 
     if (!email.toLowerCase().endsWith("@ilivik.com")) {
-      setLoginError("Accès refusé : Seuls les e-mails de domaine @ilivik.com sont autorisés.");
+      setLoginError("Accès refusé : Seuls les e-mails de domaine @ilivik.com et les noms d'utilisateurs sont autorisés.");
       return;
     }
 
     try {
-      const response = await fetch("/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const customUser = {
-          email: data.user.email,
-          displayName: data.user.name,
-          uid: data.user.email,
-          customRole: data.user.role
-        };
-        setFirebaseUser(customUser);
-        setCurrentUser(data.user.name);
-        setFormAuthor(data.user.name);
-        localStorage.setItem("sb_support_user", data.user.name);
-
-        setLoginEmail("");
-        setLoginPassword("");
-        setShowAuthModal(false);
+      if (isSignUp) {
+        if (!name) {
+          setLoginError("Veuillez saisir votre nom complet.");
+          return;
+        }
+        const response = await fetch("/api/users/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, email, password })
+        });
+        
+        if (response.ok) {
+          setLoginError("Compte créé avec succès. Il est en attente de validation par le Super-Administrateur.");
+          setLoginEmail("");
+          setLoginPassword("");
+          setLoginName("");
+          setIsSignUp(false);
+        } else {
+          const errData = await response.json();
+          setLoginError(errData.error || "Erreur lors de l'inscription.");
+        }
       } else {
-        const errData = await response.json();
-        setLoginError(errData.error || "E-mail ou mot de passe incorrect.");
+        const response = await fetch("/api/users/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const customUser = {
+            email: data.email,
+            displayName: data.name,
+            uid: data.email,
+            customRole: data.role
+          };
+          setFirebaseUser(customUser);
+          setCurrentUser(data.name);
+          setFormAuthor(data.name);
+          localStorage.setItem("sb_support_user", data.name);
+
+          setLoginEmail("");
+          setLoginPassword("");
+          setShowAuthModal(false);
+        } else {
+          const errData = await response.json();
+          setLoginError(errData.error || "E-mail ou mot de passe incorrect.");
+        }
       }
     } catch (err: any) {
       setLoginError("Erreur réseau: " + err.message);
-    }
-  };
-
-  const handlePinLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    setPinError("");
-    const pin = pinInput.trim();
-    if (pin === "ilivik2026" || pin === "1234" || pin.toLowerCase() === "salesbuzz") {
-      setIsPinAuthenticated(true);
-      localStorage.setItem("sb_pin_authenticated", "true");
-      
-      const savedUser = localStorage.getItem("sb_support_user");
-      if (!savedUser || savedUser === "Team Ilivik Membre") {
-        setCurrentUser("Collaborateur Team Ilivik");
-        setFormAuthor("Collaborateur Team Ilivik");
-        localStorage.setItem("sb_support_user", "Collaborateur Team Ilivik");
-      }
-      setPinInput("");
-      setShowAuthModal(false);
-    } else {
-      setPinError("Code Incorrect. Veuillez saisir le code collaborateur fourni par l'administrateur (ex: ilivik2026).");
     }
   };
 
@@ -409,8 +505,6 @@ export default function App() {
     } catch (err) {
       console.error(err);
     }
-    setIsPinAuthenticated(false);
-    localStorage.removeItem("sb_pin_authenticated");
     setCurrentUser("Team Ilivik Membre");
     setFormAuthor("Team Ilivik Membre");
     localStorage.removeItem("sb_support_user");
@@ -688,7 +782,7 @@ export default function App() {
   };
 
   return (
-    <div id="app-root" className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col p-4 sm:p-6 gap-6 selection:bg-indigo-500/30 selection:text-white">
+    <div id="app-root" className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col p-4 sm:p-6 gap-6 selection:bg-indigo-500/30 selection:text-white max-w-7xl mx-auto w-full">
       
       {/* Upper Brand Bar */}
       <header id="header-brand" className="flex flex-col sm:flex-row justify-between items-center bg-slate-900/65 backdrop-blur-md p-4 rounded-2xl border border-slate-800 shadow-xl gap-4">
@@ -748,7 +842,6 @@ export default function App() {
               <button
                 id="header-login-btn"
                 onClick={() => {
-                  setPinError("");
                   setAuthPurpose("general");
                   setShowAuthModal(true);
                 }}
@@ -810,6 +903,38 @@ export default function App() {
             >
               <Plus className="h-4 w-4" />
               <span>Déclarer Erreur</span>
+            </button>
+          )}
+
+          {getPermission("allowAttachmentsSpace") && (
+            <button
+              id="tab-btn-attachments"
+              onClick={() => setActiveTab("attachments")}
+              className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                activeTab === "attachments"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/25"
+                  : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
+              }`}
+            >
+              <Layers className="h-4 w-4 text-indigo-400" />
+              <span className="hidden sm:inline">Pièces Jointes</span>
+              <span className="sm:hidden">Fichiers</span>
+            </button>
+          )}
+
+          {getPermission("allowDatatable") && (
+            <button
+              id="tab-btn-datatable"
+              onClick={() => setActiveTab("datatable")}
+              className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                activeTab === "datatable"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/25"
+                  : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
+              }`}
+            >
+              <Table className="h-4 w-4 text-indigo-400" />
+              <span className="hidden sm:inline">Tableau Données</span>
+              <span className="sm:hidden">Tableau</span>
             </button>
           )}
 
@@ -1001,12 +1126,26 @@ export default function App() {
             </section>
 
             {/* Card C: Recent Errors Catalog (cols 12, lg:col-span-5) */}
+            {getPermission("allowRecentErrors") && (
             <section id="bento-errors-block" className="col-span-12 lg:col-span-5 bg-slate-900 border border-slate-800 rounded-3xl p-5 flex flex-col h-[288px] shadow-2xl overflow-hidden">
               <div className="flex justify-between items-center mb-3.5">
-                <h3 className="font-bold text-slate-200 text-sm">Erreurs Récentes ({filteredErrors.length})</h3>
-                <span className="text-[9px] bg-indigo-900/40 border border-indigo-500/20 px-2 py-0.5 rounded text-indigo-300 font-bold uppercase tracking-wider">Top Solutions</span>
+                <h3 className="font-bold text-slate-200 text-sm">Erreurs Récentes ({filteredErrors.filter(e => errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).length})</h3>
+                <div className="flex gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                  <button 
+                    onClick={() => setErrorDisplayType("unresolved")}
+                    className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider transition-all ${errorDisplayType === "unresolved" ? "bg-amber-950/60 text-amber-400 border border-amber-500/20" : "text-slate-500 hover:text-slate-300"}`}
+                  >
+                    Non Résolu
+                  </button>
+                  <button 
+                    onClick={() => setErrorDisplayType("resolved")}
+                    className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider transition-all ${errorDisplayType === "resolved" ? "bg-emerald-950/60 text-emerald-400 border border-emerald-500/20" : "text-slate-500 hover:text-slate-300"}`}
+                  >
+                    Résolu
+                  </button>
+                </div>
               </div>
-
+ 
               {/* Scrollable list */}
               <div className="space-y-2.5 overflow-y-auto max-h-[210px] pr-1 scrollbar-thin">
                 {isLoading ? (
@@ -1014,12 +1153,12 @@ export default function App() {
                     <div className="border-2 border-slate-700 border-t-indigo-400 rounded-full h-5 w-5 animate-spin mb-2"></div>
                     <span>Chargement de la base Firestore...</span>
                   </div>
-                ) : filteredErrors.length === 0 ? (
+                ) : filteredErrors.filter(e => errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).length === 0 ? (
                   <div className="py-12 text-center text-slate-500 text-xs">
                     Aucune fiche ne correspond à votre filtre.
                   </div>
                 ) : (
-                  filteredErrors.map((err) => (
+                  filteredErrors.filter(e => errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).map((err) => (
                     <div
                       key={err.id}
                       onClick={() => handleSelectError(err)}
@@ -1086,6 +1225,7 @@ export default function App() {
                 )}
               </div>
             </section>
+            )}
 
             {/* Card D: Stats Block (cols 12, lg:col-span-3) */}
             <section id="bento-stats-block" className="col-span-12 sm:col-span-6 lg:col-span-3 bg-slate-900 rounded-3xl border border-slate-800 p-5 flex flex-col justify-center items-center gap-1 shadow-2xl h-[134px] hover:border-slate-700 transition-all">
@@ -1283,66 +1423,78 @@ export default function App() {
                 </div>
 
                 <div className="w-full flex flex-col gap-4 mt-4">
-                  {/* Google Authenticator */}
+                  {/* CUSTOM E-MAIL / PASSWORD FORM */}
+                  <form onSubmit={handleCustomEmailPasswordLogin} className="flex flex-col gap-2.5">
+                    {isSignUp && (
+                      <div className="flex flex-col gap-1 text-left">
+                        <input
+                          id="auth-name-input"
+                          type="text"
+                          required
+                          placeholder="Votre Nom Complet..."
+                          value={loginName}
+                          onChange={(e) => setLoginName(e.target.value)}
+                          className="w-full bg-slate-950 text-white text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                        />
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1 text-left">
+                      <input
+                        id="auth-email-input"
+                        type="text"
+                        required
+                        placeholder="Nom d'utilisateur ou e-mail (@ilivik.com)..."
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        className="w-full bg-slate-950 text-white text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1 text-left">
+                      <input
+                        id="auth-password-input"
+                        type="password"
+                        required
+                        placeholder="Mot de passe confidentiel..."
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        className="w-full bg-slate-950 text-white text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                      />
+                    </div>
+                    <button
+                      id="auth-password-submit"
+                      type="submit"
+                      className="w-full bg-indigo-600 hover:bg-indigo-550 text-white font-bold text-xs py-3 rounded-xl transition-all shadow-md shadow-indigo-950/40"
+                    >
+                      {isSignUp ? "Créer un compte" : "Se connecter avec e-mail"}
+                    </button>
+                    {loginError && (
+                      <p className="text-[10px] text-red-400 font-bold bg-red-950/30 border border-red-500/10 p-2.5 rounded-lg text-center leading-relaxed">
+                        {loginError}
+                      </p>
+                    )}
+                    <button type="button" onClick={() => { setIsSignUp(!isSignUp); setLoginError(""); }} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors mt-2">
+                       {isSignUp ? "Déjà un compte ? Se connecter" : "Pas de compte ? S'inscrire"}
+                    </button>
+                  </form>
+                  
+                  <div className="relative py-2.5 flex items-center justify-center">
+                    <span className="absolute w-full border-t border-slate-800/80"></span>
+                    <span className="relative bg-slate-900 text-[10px] text-slate-500 font-bold uppercase tracking-wider px-3.5">OU CONTINUER AVEC</span>
+                  </div>
+                  
                   <button
                     id="google-signin-btn-add-tab"
                     onClick={handleGoogleLogin}
                     className="w-full bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2.5 transition-all shadow-md cursor-pointer group"
                   >
                     <svg className="h-4 w-4" viewBox="0 0 24 24">
-                      <path
-                        fill="#4285F4"
-                        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.91h6.63c-.29 1.5-.1.15-1.15 2.6l3.07 2.38c1.8-1.66 2.84-4.11 2.84-6.82z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 24c3.24 0 5.97-1.08 7.96-2.91l-3.07-2.38c-.9.6-2.03.95-3.33.95-2.53 0-4.67-1.71-5.43-4.01l-3.23 2.5C6.46 22.18 9.97 24 12 24z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M6.57 15.65c-.2-.6-.31-1.25-.31-1.9s.11-1.3.31-1.9l-3.23-2.5C2.53 10.45 2 11.95 2 13.5s.53 3.05 1.34 4.15l3.23-2.5z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.96 1.19 15.24 0 12 0 9.97 0 6.46 1.82 4.1 4.85l3.23 2.5C8.09 6.46 10.23 4.75 12 4.75z"
-                      />
+                      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.91h6.63c-.29 1.5-.1.15-1.15 2.6l3.07 2.38c1.8-1.66 2.84-4.11 2.84-6.82z" />
+                      <path fill="#34A853" d="M12 24c3.24 0 5.97-1.08 7.96-2.91l-3.07-2.38c-.9.6-2.03.95-3.33.95-2.53 0-4.67-1.71-5.43-4.01l-3.23 2.5C6.46 22.18 9.97 24 12 24z" />
+                      <path fill="#FBBC05" d="M6.57 15.65c-.2-.6-.31-1.25-.31-1.9s.11-1.3.31-1.9l-3.23-2.5C2.53 10.45 2 11.95 2 13.5s.53 3.05 1.34 4.15l3.23-2.5z" />
+                      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.96 1.19 15.24 0 12 0 9.97 0 6.46 1.82 4.1 4.85l3.23 2.5C8.09 6.46 10.23 4.75 12 4.75z" />
                     </svg>
                     <span>Continuer avec Google (Sécurisé)</span>
                   </button>
-
-                  <div className="relative py-2.5 flex items-center justify-center">
-                    <span className="absolute w-full border-t border-slate-800/80"></span>
-                    <span className="relative bg-slate-900 text-[10px] text-slate-500 font-bold uppercase tracking-wider px-3.5">OU CODE ÉQUIPE</span>
-                  </div>
-
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      handlePinLogin(e);
-                    }}
-                    className="flex flex-col gap-2.5"
-                  >
-                    <input
-                      id="pin-entry-input"
-                      type="password"
-                      placeholder="Saisir le Code d'accès collaborateur..."
-                      value={pinInput}
-                      onChange={(e) => setPinInput(e.target.value)}
-                      className="w-full text-center bg-slate-950 text-white text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
-                    />
-                    <button
-                      id="pin-login-submit-btn"
-                      type="submit"
-                      className="w-full bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white font-bold text-xs py-3 rounded-xl transition-all border border-slate-750"
-                    >
-                      S'authentifier par Code
-                    </button>
-                    {pinError && (
-                      <p className="text-[10px] text-red-400 font-semibold bg-red-950/30 border border-red-500/10 p-2.5 rounded-lg mt-1 text-center leading-normal">
-                        {pinError}
-                      </p>
-                    )}
-                  </form>
                 </div>
               </div>
             ) : !getPermission("allowAddError") ? (
@@ -1811,6 +1963,53 @@ export default function App() {
                           className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
                         />
                       </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Afficher Erreurs Récentes</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'affichage de la section</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowRecentErrors}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowRecentErrors: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+                      
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Pièces jointes</span>
+                          <span className="text-[9px] text-slate-500">Autoriser le téléchargement direct</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowAttachmentsSpace}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowAttachmentsSpace: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Tableau de données</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'export Excel</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowDatatable}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowDatatable: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
                     </div>
                   </div>
 
@@ -1950,6 +2149,53 @@ export default function App() {
                           onChange={(e) => setPermissionsConfig({
                             ...permissionsConfig,
                             publicUser: { ...permissionsConfig.publicUser, allowChatActions: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Afficher Erreurs Récentes</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'affichage de la section</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowRecentErrors}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowRecentErrors: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+                      
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Pièces jointes</span>
+                          <span className="text-[9px] text-slate-500">Autoriser le téléchargement direct</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowAttachmentsSpace}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowAttachmentsSpace: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Tableau de données</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'export Excel</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowDatatable}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowDatatable: e.target.checked }
                           })}
                           className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
                         />
@@ -2192,6 +2438,7 @@ webView.load(myRequest)`}</pre>
                         >
                           <option value="ilivikUsers">Membre Team</option>
                           <option value="publicUser">Visiteur Public</option>
+                          <option value="inviteUser">Invité</option>
                         </select>
                       </div>
 
@@ -2199,10 +2446,11 @@ webView.load(myRequest)`}</pre>
                         <label className="text-[10px] uppercase text-slate-450 font-bold">Statut du Compte</label>
                         <select
                           value={userFormStatus}
-                          onChange={(e) => setUserFormStatus(e.target.value as "active" | "disabled")}
+                          onChange={(e) => setUserFormStatus(e.target.value as "active" | "disabled" | "pending")}
                           className="px-2.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500/80 cursor-pointer"
                         >
                           <option value="active">Actif (Autorisé)</option>
+                          <option value="pending">En attente (Pending)</option>
                           <option value="disabled">Désactivé (Banni)</option>
                         </select>
                       </div>
@@ -2289,17 +2537,23 @@ webView.load(myRequest)`}</pre>
                               <td className="p-3 text-indigo-350">{user.email}</td>
                               <td className="p-3 font-mono text-slate-400 select-all">{user.password || "••••••••"}</td>
                               <td className="p-3">
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950 text-indigo-400 border border-indigo-500/10 uppercase">
-                                  {user.role === "ilivikUsers" ? "Membre Team" : "Visiteur Public"}
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase ${
+                                  user.role === "ilivikUsers" ? "bg-indigo-950 text-indigo-400 border-indigo-500/10" : 
+                                  user.role === "inviteUser" ? "bg-purple-950 text-purple-400 border-purple-500/10" : 
+                                  "bg-slate-800 text-slate-400 border-slate-700"
+                                }`}>
+                                  {user.role === "ilivikUsers" ? "Membre Team" : user.role === "inviteUser" ? "Invité" : "Visiteur Public"}
                                 </span>
                               </td>
                               <td className="p-3">
                                 <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
                                   user.status === "active"
                                     ? "bg-emerald-950 text-emerald-400 border border-emerald-500/10"
-                                    : "bg-red-950 text-red-400 border border-red-500/10"
+                                    : user.status === "pending"
+                                      ? "bg-amber-950 text-amber-400 border border-amber-500/10"
+                                      : "bg-red-950 text-red-400 border border-red-500/10"
                                 }`}>
-                                  {user.status === "active" ? "Actif (Autorisé)" : "Désactivé (Banni)"}
+                                  {user.status === "active" ? "Actif (Autorisé)" : user.status === "pending" ? "En attente" : "Désactivé (Banni)"}
                                 </span>
                               </td>
                               <td className="p-3 text-right flex justify-end gap-1.5 items-center">
@@ -2360,6 +2614,16 @@ webView.load(myRequest)`}</pre>
             </div>
 
           </div>
+        )}
+
+        {/* TAB 4: ATTACHMENTS SPACE */}
+        {activeTab === "attachments" && getPermission("allowAttachmentsSpace") && (
+          <AttachmentsSpace isSuperAdmin={isSuperAdmin} />
+        )}
+
+        {/* TAB 5: DATATABLE SPACE */}
+        {activeTab === "datatable" && getPermission("allowDatatable") && (
+          <DatatableSpace errors={errors} isSuperAdmin={isSuperAdmin} />
         )}
 
       </main>
@@ -2549,7 +2813,6 @@ webView.load(myRequest)`}</pre>
                           onClick={() => {
                             if (!isLoggedIn) {
                               setAuthPurpose("edit");
-                              setPinError("");
                               setShowAuthModal(true);
                             } else {
                               setSolutionInput(viewingErrorDetail.solution);
@@ -2581,7 +2844,6 @@ webView.load(myRequest)`}</pre>
                           onClick={() => {
                             if (!isLoggedIn) {
                               setAuthPurpose("edit");
-                              setPinError("");
                               setShowAuthModal(true);
                             } else {
                               setSolutionInput("");
@@ -2685,46 +2947,27 @@ webView.load(myRequest)`}</pre>
                 </div>
 
                 <div className="w-full flex flex-col gap-3.5 mt-2">
-                  {/* Google Authenticator */}
-                  <button
-                    id="google-signin-btn-modal"
-                    onClick={handleGoogleLogin}
-                    className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer group"
-                  >
-                    <svg className="h-4 w-4" viewBox="0 0 24 24">
-                      <path
-                        fill="#4285F4"
-                        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.91h6.63c-.29 1.5-.1.15-1.15 2.6l3.07 2.38c1.8-1.66 2.84-4.11 2.84-6.82z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 24c3.24 0 5.97-1.08 7.96-2.91l-3.07-2.38c-.9.6-2.03.95-3.33.95-2.53 0-4.67-1.71-5.43-4.01l-3.23 2.5C6.46 22.18 9.97 24 12 24z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M6.57 15.65c-.2-.6-.31-1.25-.31-1.9s.11-1.3.31-1.9l-3.23-2.5C2.53 10.45 2 11.95 2 13.5s.53 3.05 1.34 4.15l3.23-2.5z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.96 1.19 15.24 0 12 0 9.97 0 6.46 1.82 4.1 4.85l3.23 2.5C8.09 6.46 10.23 4.75 12 4.75z"
-                      />
-                    </svg>
-                    <span>Continuer avec Google</span>
-                  </button>
-
-                  <div className="relative py-1 flex items-center justify-center">
-                    <span className="absolute w-full border-t border-slate-850"></span>
-                    <span className="relative bg-slate-900 text-[9px] text-slate-500 font-bold uppercase tracking-wider px-2 rounded">OU IDENTIFIANTS COLLABORATEUR</span>
-                  </div>
-
                   {/* CUSTOM E-MAIL / PASSWORD FORM */}
                   <form onSubmit={handleCustomEmailPasswordLogin} className="flex flex-col gap-2.5">
+                    {isSignUp && (
+                      <div className="flex flex-col gap-1 text-left">
+                        <input
+                          id="auth-name-input-modal"
+                          type="text"
+                          required
+                          placeholder="Votre Nom Complet..."
+                          value={loginName}
+                          onChange={(e) => setLoginName(e.target.value)}
+                          className="w-full bg-slate-950 text-white text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                        />
+                      </div>
+                    )}
                     <div className="flex flex-col gap-1 text-left">
                       <input
                         id="auth-email-input"
-                        type="email"
+                        type="text"
                         required
-                        placeholder="Identifiant e-mail (@ilivik.com)..."
+                        placeholder="Nom d'utilisateur ou e-mail (@ilivik.com)..."
                         value={loginEmail}
                         onChange={(e) => setLoginEmail(e.target.value)}
                         className="w-full bg-slate-950 text-white text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
@@ -2746,48 +2989,36 @@ webView.load(myRequest)`}</pre>
                       type="submit"
                       className="w-full bg-indigo-600 hover:bg-indigo-550 text-white font-bold text-xs py-2.5 rounded-xl transition-all shadow-md shadow-indigo-950/40"
                     >
-                      Se connecter avec e-mail
+                      {isSignUp ? "Créer un compte" : "Se connecter avec e-mail"}
                     </button>
                     {loginError && (
                       <p className="text-[10px] text-red-400 font-bold bg-red-950/30 border border-red-500/10 p-2 rounded text-center leading-relaxed">
                         {loginError}
                       </p>
                     )}
-                  </form>
-
-                  <div className="relative py-1 flex items-center justify-center mt-1">
-                    <span className="absolute w-full border-t border-slate-850"></span>
-                    <span className="relative bg-slate-900 text-[9px] text-slate-500 font-bold uppercase tracking-wider px-2 rounded">OU CODE PIN RAPIDE</span>
-                  </div>
-
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      handlePinLogin(e);
-                    }}
-                    className="flex flex-col gap-2"
-                  >
-                    <input
-                      id="modal-pin-entry"
-                      type="password"
-                      placeholder="Saisir le Code d'accès rapide..."
-                      value={pinInput}
-                      onChange={(e) => setPinInput(e.target.value)}
-                      className="w-full text-center bg-slate-950 text-white text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
-                    />
-                    <button
-                      id="modal-pin-submit"
-                      type="submit"
-                      className="w-full bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white font-bold text-xs py-2.5 rounded-xl transition-all border border-slate-750"
-                    >
-                      S'authentifier par PIN
+                    <button type="button" onClick={() => { setIsSignUp(!isSignUp); setLoginError(""); }} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors mt-1">
+                       {isSignUp ? "Déjà un compte ? Se connecter" : "Pas de compte ? S'inscrire"}
                     </button>
-                    {pinError && (
-                      <p className="text-[10px] text-red-400 font-bold bg-red-950/30 border border-red-500/10 p-2 rounded mt-1 text-center leading-relaxed">
-                        {pinError}
-                      </p>
-                    )}
                   </form>
+
+                  <div className="relative py-1 flex items-center justify-center">
+                    <span className="absolute w-full border-t border-slate-850"></span>
+                    <span className="relative bg-slate-900 text-[9px] text-slate-500 font-bold uppercase tracking-wider px-2 rounded">OU CONTINUER AVEC</span>
+                  </div>
+                  
+                  <button
+                    id="google-signin-btn-modal"
+                    onClick={handleGoogleLogin}
+                    className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer group"
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.91h6.63c-.29 1.5-.1.15-1.15 2.6l3.07 2.38c1.8-1.66 2.84-4.11 2.84-6.82z" />
+                      <path fill="#34A853" d="M12 24c3.24 0 5.97-1.08 7.96-2.91l-3.07-2.38c-.9.6-2.03.95-3.33.95-2.53 0-4.67-1.71-5.43-4.01l-3.23 2.5C6.46 22.18 9.97 24 12 24z" />
+                      <path fill="#FBBC05" d="M6.57 15.65c-.2-.6-.31-1.25-.31-1.9s.11-1.3.31-1.9l-3.23-2.5C2.53 10.45 2 11.95 2 13.5s.53 3.05 1.34 4.15l3.23-2.5z" />
+                      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.96 1.19 15.24 0 12 0 9.97 0 6.46 1.82 4.1 4.85l3.23 2.5C8.09 6.46 10.23 4.75 12 4.75z" />
+                    </svg>
+                    <span>Continuer avec Google</span>
+                  </button>
                 </div>
               </div>
             </motion.div>

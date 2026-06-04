@@ -43,7 +43,7 @@ service cloud.firestore {
       return data.get('name', null) is string && data.get('name', null).size() > 0 && data.get('name', null).size() <= 200
           && data.get('email', null) is string && data.get('email', null).size() > 0 && data.get('email', null).size() <= 200
           && data.get('password', null) is string && data.get('password', null).size() > 0 && data.get('password', null).size() <= 200
-          && data.get('status', null) is string && (data.get('status', null) == 'active' || data.get('status', null) == 'disabled')
+          && data.get('status', null) is string && (data.get('status', null) == 'active' || data.get('status', null) == 'disabled' || data.get('status', null) == 'pending')
           && data.get('role', null) is string && (data.get('role', null) == 'ilivikUsers' || data.get('role', null) == 'publicUser')
           && data.get('createdAt', null) is string && data.get('createdAt', null).size() <= 128;
     }

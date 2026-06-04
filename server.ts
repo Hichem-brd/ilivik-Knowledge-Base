@@ -41,7 +41,7 @@ interface UserAccount {
   name: string;
   email: string;
   password?: string;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "pending";
   role: string;
   createdAt: string;
 }
@@ -266,7 +266,10 @@ const DEFAULT_PERMISSIONS = {
     allowEditSolution: true,
     allowDeleteError: false,
     allowUseAI: true,
-    allowChatActions: true
+    allowChatActions: true,
+    allowRecentErrors: true,
+    allowAttachmentsSpace: true,
+    allowDatatable: false
   },
   publicUser: {
     allowCatalogTab: true,
@@ -276,7 +279,23 @@ const DEFAULT_PERMISSIONS = {
     allowEditSolution: false,
     allowDeleteError: false,
     allowUseAI: true,
-    allowChatActions: true
+    allowChatActions: true,
+    allowRecentErrors: false,
+    allowAttachmentsSpace: false,
+    allowDatatable: false
+  },
+  inviteUser: {
+    allowCatalogTab: true,
+    allowChatTab: true,
+    allowAddTab: true,
+    allowAddError: false,
+    allowEditSolution: false,
+    allowDeleteError: false,
+    allowUseAI: true,
+    allowChatActions: true,
+    allowRecentErrors: true,
+    allowAttachmentsSpace: true,
+    allowDatatable: false
   }
 };
 
@@ -299,7 +318,7 @@ app.get("/api/config/permissions", async (req, res) => {
 
 app.post("/api/config/permissions", async (req, res) => {
   try {
-    const { ilivikUsers, publicUser, requesterEmail } = req.body;
+    const { ilivikUsers, publicUser, inviteUser, requesterEmail } = req.body;
     
     // Only allow hichem.b@ilivik.com to modify permissions
     if (!requesterEmail || requesterEmail.toLowerCase() !== "hichem.b@ilivik.com") {
@@ -311,7 +330,7 @@ app.post("/api/config/permissions", async (req, res) => {
     }
 
     const configDocRef = doc(db, "config", "permissions");
-    await setDoc(configDocRef, { ilivikUsers, publicUser });
+    await setDoc(configDocRef, { ilivikUsers, publicUser, inviteUser: inviteUser || DEFAULT_PERMISSIONS.inviteUser });
     res.json({ success: true, message: "Configuration mise à jour dans la base Firestore !" });
   } catch (err: any) {
     res.status(500).json({ error: "Échec de l'enregistrement de la configuration: " + err.message });
@@ -419,6 +438,39 @@ app.delete("/api/users/:email", async (req, res) => {
 });
 
 // Custom Authentication/Login Route
+app.post("/api/users/signup", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: "Le nom, l'e-mail et le mot de passe sont obligatoires." });
+    }
+    
+    if (!email.toLowerCase().endsWith("@ilivik.com")) {
+      return res.status(400).json({ error: "Seuls les e-mails de domaine @ilivik.com sont autorisés." });
+    }
+
+    const userDocRef = doc(db, "users", email.toLowerCase().trim());
+    const userSnap = await getDoc(userDocRef);
+    if (userSnap.exists()) {
+      return res.status(400).json({ error: "Un utilisateur avec cet e-mail existe déjà." });
+    }
+    
+    const newUser = {
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      password: password,
+      status: "pending",
+      role: "ilivikUsers",
+      createdAt: new Date().toISOString(),
+    };
+    
+    await setDoc(userDocRef, newUser);
+    res.status(201).json(newUser);
+  } catch (err: any) {
+    res.status(500).json({ error: "Échec de la création: " + err.message });
+  }
+});
+
 app.post("/api/users/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -428,9 +480,9 @@ app.post("/api/users/login", async (req, res) => {
 
     const emailKey = email.toLowerCase().trim();
     
-    // Check for hardcoded local administration fallback or user search in Firestore
-    if (emailKey === "hichem.b@ilivik.com" && password === "admin123") {
-      const adminDocRef = doc(db, "users", "hichem.b@ilivik.com");
+    // Auto-create admin if doesn't exist yet
+    if (emailKey === "hichem.b@ilivik.com") {
+      const adminDocRef = doc(db, "users", emailKey);
       const adminSnap = await getDoc(adminDocRef);
       if (!adminSnap.exists()) {
         await setDoc(adminDocRef, {
@@ -442,12 +494,6 @@ app.post("/api/users/login", async (req, res) => {
           createdAt: new Date().toISOString()
         });
       }
-      return res.json({
-        email: "hichem.b@ilivik.com",
-        name: "Hichem B. (Super Admin)",
-        status: "active",
-        role: "ilivikUsers"
-      });
     }
 
     const userDocRef = doc(db, "users", emailKey);
@@ -458,6 +504,9 @@ app.post("/api/users/login", async (req, res) => {
     const userData = userSnap.data();
     if (userData.password !== password) {
       return res.status(400).json({ error: "Identifiants incorrects (mot de passe invalide)." });
+    }
+    if (userData.status === "pending") {
+      return res.status(403).json({ error: "Ce compte est en attente de validation par le Super-Administrateur." });
     }
     if (userData.status === "disabled") {
       return res.status(403).json({ error: "Ce compte a été suspendu par le Super-Administrateur." });

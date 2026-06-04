@@ -34,18 +34,22 @@ export interface RolePermissions {
   allowDeleteError: boolean;
   allowUseAI: boolean;
   allowChatActions: boolean;
+  allowRecentErrors: boolean;
+  allowAttachmentsSpace?: boolean;
+  allowDatatable?: boolean;
 }
 
 export interface AppPermissionsConfig {
   ilivikUsers: RolePermissions;
   publicUser: RolePermissions;
+  inviteUser: RolePermissions;
 }
 
 export interface UserAccount {
   name: string;
   email: string;
   password?: string;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "pending";
   role: string;
   createdAt?: string;
 }
