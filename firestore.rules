@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Catch-all safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-\\.\\@]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation helper for Error documents
+    function isValidError(data) {
+      return data.get('title', null) is string && data.get('title', null).size() > 0 && data.get('title', null).size() <= 1000
+          && data.get('description', null) is string && data.get('description', null).size() > 0 && data.get('description', null).size() <= 50000
+          && data.get('solution', null) is string && data.get('solution', null).size() >= 0 && data.get('solution', null).size() <= 100000
+          && data.get('author', null) is string && data.get('author', null).size() > 0 && data.get('author', null).size() <= 200
+          && data.get('createdAt', null) is string && data.get('createdAt', null).size() <= 128
+          && (data.get('errorCode', null) == null || (data.get('errorCode', null) is string && data.get('errorCode', null).size() <= 100))
+          && (data.get('imageUrl', null) == null || (data.get('imageUrl', null) is string && data.get('imageUrl', null).size() <= 50000000))
+          && (data.get('tags', null) == null || (data.get('tags', null) is list && data.get('tags', null).size() <= 20))
+          && (data.get('errorType', null) == null || (data.get('errorType', null) is string && data.get('errorType', null).size() <= 100))
+          && (data.get('errorCategory', null) == null || (data.get('errorCategory', null) is string && data.get('errorCategory', null).size() <= 100))
+          && (data.get('errorPriority', null) == null || (data.get('errorPriority', null) is string && data.get('errorPriority', null).size() <= 100))
+          && (data.get('client', null) == null || (data.get('client', null) is string && data.get('client', null).size() <= 1000))
+          && (data.get('isResolved', null) == null || data.get('isResolved', null) == true || data.get('isResolved', null) == false)
+          && (data.get('resolvedAt', null) == null || (data.get('resolvedAt', null) is string && data.get('resolvedAt', null).size() <= 128));
+    }
+
+    // Validation helper for User documents
+    function isValidUser(data) {
+      return data.get('name', null) is string && data.get('name', null).size() > 0 && data.get('name', null).size() <= 200
+          && data.get('email', null) is string && data.get('email', null).size() > 0 && data.get('email', null).size() <= 200
+          && data.get('password', null) is string && data.get('password', null).size() > 0 && data.get('password', null).size() <= 200
+          && data.get('status', null) is string && (data.get('status', null) == 'active' || data.get('status', null) == 'disabled')
+          && data.get('role', null) is string && (data.get('role', null) == 'ilivikUsers' || data.get('role', null) == 'publicUser')
+          && data.get('createdAt', null) is string && data.get('createdAt', null).size() <= 128;
+    }
+
+    // Validation helpers for Permissions config
+    function isValidRolePermissions(role) {
+      return role != null 
+          && (role.get('allowCatalogTab', null) == true || role.get('allowCatalogTab', null) == false)
+          && (role.get('allowChatTab', null) == true || role.get('allowChatTab', null) == false)
+          && (role.get('allowAddTab', null) == true || role.get('allowAddTab', null) == false)
+          && (role.get('allowAddError', null) == true || role.get('allowAddError', null) == false)
+          && (role.get('allowEditSolution', null) == true || role.get('allowEditSolution', null) == false)
+          && (role.get('allowDeleteError', null) == true || role.get('allowDeleteError', null) == false)
+          && (role.get('allowUseAI', null) == true || role.get('allowUseAI', null) == false)
+          && (role.get('allowChatActions', null) == true || role.get('allowChatActions', null) == false);
+    }
+
+    function isValidAppPermissionsConfig(data) {
+      return data != null 
+          && isValidRolePermissions(data.get('ilivikUsers', null))
+          && isValidRolePermissions(data.get('publicUser', null));
+    }
+
+    // Match rules for the 'errors' collection
+    match /errors/{errorId} {
+      allow list: if true;
+      allow get: if true;
+      allow create: if isValidId(errorId) && isValidError(incoming());
+      allow update: if isValidError(incoming()) && incoming().get('createdAt', '') == existing().get('createdAt', '');
+      allow delete: if true;
+    }
+
+    // Match rules for 'users' collection
+    match /users/{email} {
+      allow list: if true;
+      allow get: if true;
+      allow create: if isValidId(email) && isValidUser(incoming());
+      allow update: if isValidUser(incoming()) && incoming().get('createdAt', '') == existing().get('createdAt', '');
+      allow delete: if true;
+    }
+
+    // Match rules for config collection and permissions document
+    match /config/{configId} {
+      allow read: if true;
+      allow write: if configId == 'permissions' && isValidAppPermissionsConfig(incoming());
+    }
+  }
+}

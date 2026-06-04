@@ -1,0 +1,373 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom styles and smooth animations */
+body {
+  font-family: var(--font-sans);
+  background-color: #0f172a; /* Slate 900 */
+  color: #f1f5f9; /* Slate 100 */
+}
+
+/* Hide scrollbars for aesthetic panels but keep functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Base custom interactive transitions */
+.smooth-hover {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==========================================
+   DYNAMIC SYSTEM THEME ADAPTABILITY OVERRIDES
+   Adapts to Light Mode beautifully while preserving
+   pristine space and typography
+   ========================================== */
+@media (prefers-color-scheme: light) {
+  /* Main Background */
+  body, #app-root {
+    background-color: #f8fafc !important;
+    color: #1e293b !important;
+  }
+
+  /* Headers and Tab Navigation */
+  #header-brand, #tab-navigation {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    border-color: #cbd5e1 !important;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.03), 0 2px 4px -2px rgba(0, 0, 0, 0.03) !important;
+  }
+  #header-brand h1 {
+    color: #0f172a !important;
+  }
+  #header-brand p {
+    color: #64748b !important;
+  }
+
+  /* Collaborator Input Widget */
+  #header-brand .flex.items-center.gap-3.bg-slate-800\/50 {
+    background-color: #f1f5f9 !important;
+    border-color: #cbd5e1 !important;
+  }
+  #header-brand .flex.items-center.gap-3.bg-slate-800\/50 input {
+    color: #0f172a !important;
+  }
+
+  /* Tabs bar buttons */
+  #tab-navigation button:not(.bg-indigo-600) {
+    color: #475569 !important;
+  }
+  #tab-navigation button:not(.bg-indigo-600):hover {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+  }
+
+  /* Catalog View Container */
+  #view-catalog {
+    color: #1e293b !important;
+  }
+
+  /* Bento Search Block & Quick Docs Box */
+  #bento-search-block, #bento-quick-docs {
+    background-color: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.03), 0 4px 6px -4px rgba(0, 0, 0, 0.03) !important;
+  }
+  #bento-search-block h2, #bento-quick-docs h2, #bento-quick-docs h3 {
+    color: #0f172a !important;
+  }
+
+  /* Catalog main list scroll box */
+  #catalog-main-list {
+    background-color: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.03) !important;
+  }
+  #catalog-main-list h2 {
+    color: #0f172a !important;
+  }
+
+  /* Search input */
+  #catalog-search-input {
+    background-color: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+  #catalog-search-input::placeholder {
+    color: #94a3b8 !important;
+  }
+
+  /* Catalog list elements */
+  #catalog-main-list div[onClick] {
+    background-color: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+  }
+  #catalog-main-list div[onClick]:hover {
+    background-color: #f1f5f9 !important;
+    border-color: #6366f1 !important;
+  }
+  #catalog-main-list div[onClick] h4 {
+    color: #0f172a !important;
+  }
+  #catalog-main-list div[onClick] p {
+    color: #475569 !important;
+  }
+
+  /* Inactive tags filters */
+  #tag-filter-all:not(.bg-indigo-600), button[id^="tag-filter-"]:not(.bg-indigo-600) {
+    background-color: #f1f5f9 !important;
+    color: #475569 !important;
+    border-color: #cbd5e1 !important;
+  }
+
+  /* AI Copilot Bento Panel */
+  #bento-ai-panel {
+    background-color: #eef2ff !important;
+    border-color: #c7d2fe !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.03) !important;
+  }
+  #bento-ai-panel h3 {
+    color: #312e81 !important;
+  }
+  #bento-ai-panel p, #bento-ai-panel li {
+    color: #3730a3 !important;
+  }
+  #bento-ai-panel .bg-indigo-950\/40 {
+    background-color: #e0e7ff !important;
+    border-color: #c7d2fe !important;
+  }
+  #bento-ai-panel .chat-msg-bot {
+    background-color: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    color: #1e293b !important;
+  }
+
+  /* Bot chat bubble inside listing widget */
+  #bento-ai-panel .bg-slate-950 {
+    background-color: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    color: #1e293b !important;
+  }
+
+  /* TAB 2: AI MAIN WORKSPACE */
+  #view-chat {
+    background-color: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.03) !important;
+  }
+  #view-chat h3 {
+    color: #0f172a !important;
+  }
+  #view-chat p, #view-chat li {
+    color: #475569 !important;
+  }
+  #view-chat .bg-slate-950\/60 {
+    background-color: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+  }
+  #view-chat .bg-slate-900 {
+    background-color: #ffffff !important;
+  }
+  /* Inside active chat, styles for bot bubbles & input */
+  #view-chat .bg-slate-950.border-slate-850 {
+    background-color: #f1f5f9 !important;
+    border-color: #cbd5e1 !important;
+    color: #1e293b !important;
+  }
+  #chat-input-message {
+    background-color: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+  #chat-input-message::placeholder {
+    color: #94a3b8 !important;
+  }
+  #view-chat label.p-3.bg-slate-900 {
+    background-color: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+    color: #64748b !important;
+  }
+  #view-chat label.p-3.bg-slate-900:hover {
+    background-color: #e2e8f0 !important;
+    color: #1e293b !important;
+  }
+  #view-chat .bg-slate-950\/60.border-t {
+    background-color: #f1f5f9 !important;
+    border-color: #e2e8f0 !important;
+  }
+
+  /* TAB 3: REGISTER NEW KNOWLEDGE BASE RECIPE */
+  #view-add-error {
+    background-color: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.03) !important;
+  }
+  #view-add-error h3 {
+    color: #0f172a !important;
+  }
+  #view-add-error p, #view-add-error label {
+    color: #475569 !important;
+  }
+  #view-add-error .border-b {
+    border-color: #e2e8f0 !important;
+  }
+  #view-add-error input, #view-add-error textarea, #view-add-error select {
+    background-color: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+  #view-add-error input::placeholder, #view-add-error textarea::placeholder {
+    color: #94a3b8 !important;
+  }
+  #view-add-error input:focus, #view-add-error textarea:focus, #view-add-error select:focus {
+    border-color: #6366f1 !important;
+    background-color: #ffffff !important;
+  }
+  #view-add-error button[id^="tag-del-btn-"] {
+    background-color: #fee2e2 !important;
+    color: #ef4444 !important;
+  }
+  /* Inside Add flow, base solution hint zone */
+  #view-add-error .bg-indigo-950 {
+    background-color: #e0e7ff !important;
+    border-color: #c7d2fe !important;
+    color: #3730a3 !important;
+  }
+
+  /* TAB 4: MOBILE WEBVIEW CONFIGURATION GUIDE & ADMIN PANEL */
+  #view-webview {
+    background-color: transparent !important;
+    color: #1e293b !important;
+  }
+  #view-webview h2, #view-webview h3 {
+    color: #0f172a !important;
+  }
+  #view-webview p {
+    color: #475569 !important;
+  }
+  #view-webview .bg-slate-900 {
+    background-color: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.03) !important;
+  }
+  #view-webview .border-slate-850 {
+    border-color: #e2e8f0 !important;
+  }
+  #view-webview .border-slate-800\/80 {
+    border-color: #e2e8f0 !important;
+  }
+  #view-webview .bg-slate-950 {
+    background-color: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+  }
+  #view-webview .bg-slate-950\/65 {
+    background-color: #f1f5f9 !important;
+    border-color: #cbd5e1 !important;
+  }
+  #view-webview .border-slate-850\/80 {
+    border-color: #cbd5e1 !important;
+  }
+  #view-webview .bg-slate-900\/50 {
+    background-color: #ffffff !important;
+    border-color: #cbd5e1 !important;
+  }
+  #view-webview .bg-slate-900\/50:hover {
+    background-color: #f8fafc !important;
+    border-color: #6366f1 !important;
+  }
+  #view-webview .text-slate-200 {
+    color: #1e293b !important;
+  }
+  #view-webview .text-slate-400 {
+    color: #64748b !important;
+  }
+  #view-webview pre {
+    color: #1e293b !important;
+  }
+  #view-webview input {
+    background-color: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+
+  /* DYNAMIC MODALS & FLOATING WORKSPACES */
+  .fixed.inset-0.bg-slate-950\/80 {
+    background-color: rgba(15, 23, 42, 0.45) !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 .bg-slate-900 {
+    background-color: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.08) !important;
+    color: #1e293b !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 h3 {
+    color: #0f172a !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 .border-slate-850\/60 {
+    background-color: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+    color: #475569 !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 .border-slate-850\/60 span {
+    color: #1e293b !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 .border-slate-850\/60 label {
+    color: #64748b !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 .bg-slate-950\/50 {
+    background-color: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 .text-slate-200 {
+    color: #1e293b !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 .text-slate-400 {
+    color: #475569 !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 .bg-slate-950 {
+    background-color: #f1f5f9 !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 button.bg-slate-950 {
+    background-color: #f1f5f9 !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 button.bg-slate-950:hover {
+    background-color: #e2e8f0 !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 #close-sidebar-btn {
+    background-color: #f1f5f9 !important;
+    color: #475569 !important;
+  }
+  .fixed.inset-0.bg-slate-950\/80 #close-sidebar-btn:hover {
+    background-color: #e2e8f0 !important;
+    color: #0f172a !important;
+  }
+
+  /* Solution inline input inside modal */
+  #modal-solution-input {
+    background-color: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+  .bg-amber-500\/5.border-amber-500\/10 {
+    background-color: #fffbeb !important;
+    border-color: #fde68a !important;
+  }
+  .bg-amber-500\/5.border-amber-500\/10 p {
+    color: #78350f !important;
+  }
+  .bg-amber-500\/5.border-amber-500\/10 strong {
+    color: #92400e !important;
+  }
+}

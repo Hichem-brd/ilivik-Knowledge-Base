@@ -1,0 +1,6 @@
+{
+  "name": "SalesBuzz Knowledge Base",
+  "description": "Base de connaissances d'assistance SalesBuzz (SFA). Recherche d'erreurs par texte ou image et assistant IA interactif.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "ErrorRecord": {
+      "title": "ErrorRecord",
+      "description": "Représente une fiche d'erreur SalesBuzz documentée avec sa solution.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Titre explicite de l'erreur"
+        },
+        "errorCode": {
+          "type": "string",
+          "description": "Code abrégé de la panne (ex: SB-102)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Explications des symptômes ou détails du problème"
+        },
+        "solution": {
+          "type": "string",
+          "description": "Procédure de résolution étape par étape"
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Image encodée en base64 pour identification visuelle"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Liste de mots-clés thématiques (ex: imprimante, bluetooth, sync)"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Horodatage de création"
+        },
+        "author": {
+          "type": "string",
+          "description": "Nom du collaborateur de la Team Ilivik ayant documenté le problème"
+        }
+      },
+      "required": ["title", "description", "createdAt", "author"]
+    },
+    "RolePermissions": {
+      "title": "RolePermissions",
+      "description": "Modular toggle settings for a user role.",
+      "type": "object",
+      "properties": {
+        "allowCatalogTab": { "type": "boolean" },
+        "allowChatTab": { "type": "boolean" },
+        "allowAddTab": { "type": "boolean" },
+        "allowAddError": { "type": "boolean" },
+        "allowEditSolution": { "type": "boolean" },
+        "allowDeleteError": { "type": "boolean" },
+        "allowUseAI": { "type": "boolean" },
+        "allowChatActions": { "type": "boolean" }
+      },
+      "required": ["allowCatalogTab", "allowChatTab", "allowAddTab", "allowAddError", "allowEditSolution", "allowDeleteError", "allowUseAI", "allowChatActions"]
+    },
+    "AppPermissionsConfig": {
+      "title": "AppPermissionsConfig",
+      "description": "Container for role permissions config in the app.",
+      "type": "object",
+      "properties": {
+        "ilivikUsers": { "$ref": "RolePermissions" },
+        "publicUser": { "$ref": "RolePermissions" }
+      },
+      "required": ["ilivikUsers", "publicUser"]
+    }
+  },
+  "firestore": {
+    "errors": {
+      "schema": "ErrorRecord",
+      "description": "Base de connaissances listant toutes les pannes documentées."
+    },
+    "config/permissions": {
+      "schema": "AppPermissionsConfig",
+      "description": "Dynamic modular permissions config."
+    }
+  }
+}
