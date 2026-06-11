@@ -4,8 +4,11 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, setDoc, doc, deleteDoc, query, orderBy, getDoc, increment, writeBatch } from "firebase/firestore";
+import { getFirestore, collection, getDocs, setDoc, doc, deleteDoc, query, orderBy, getDoc, increment, writeBatch, setLogLevel, getDocFromServer } from "firebase/firestore";
 import firebaseConfig from "./firebase-applet-config.json";
+
+// Silence verbose Firebase SDK internal connectivity logs since we have a custom health logger and local database fallbacks
+setLogLevel("silent");
 
 const app = express();
 const PORT = 3000;
@@ -16,7 +19,29 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Initialize Firebase Client SDK for server operations
 const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+const db = firebaseConfig.firestoreDatabaseId
+  ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(firebaseApp);
+
+let firestoreApiEnabledStatus: { ok: boolean; error: string | null } = { ok: true, error: null };
+
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, "config", "permissions"));
+    console.log("[SalesBuzz Knowledge Server] Connected to Firestore database successfully.");
+    firestoreApiEnabledStatus = { ok: true, error: null };
+  } catch (error: any) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    if (errorMsg.includes("offline")) {
+      console.warn("Please check your Firebase configuration: the client is offline.");
+    } else {
+      console.warn("Warning during connection challenge: fallback filesystem mode active.", errorMsg);
+    }
+    // Set Firestore status message for admin visual layout
+    firestoreApiEnabledStatus = { ok: false, error: errorMsg };
+  }
+}
+testConnection();
 
 // Core Data structure matching firebase-blueprint
 interface ErrorRecord {
@@ -86,6 +111,46 @@ const SEED_DATA: ErrorRecord[] = [
   }
 ];
 
+
+// Local DB Helpers for seamless offline/disabled mode persistence
+const LOCAL_DB_DIR = path.join(process.cwd(), "local_db");
+
+function ensureLocalDbDir() {
+  if (!fs.existsSync(LOCAL_DB_DIR)) {
+    fs.mkdirSync(LOCAL_DB_DIR, { recursive: true });
+  }
+}
+
+function readLocalData<T>(fileName: string, defaultValue: T): T {
+  ensureLocalDbDir();
+  const filePath = path.join(LOCAL_DB_DIR, fileName);
+  if (!fs.existsSync(filePath)) {
+    try {
+      fs.writeFileSync(filePath, JSON.stringify(defaultValue, null, 2), "utf-8");
+    } catch (e) {
+      console.error("Failed to write initial local database config:", e);
+    }
+    return defaultValue;
+  }
+  try {
+    const data = fs.readFileSync(filePath, "utf-8");
+    return JSON.parse(data) as T;
+  } catch (err) {
+    console.error(`Failed to read local data for ${fileName}:`, err);
+    return defaultValue;
+  }
+}
+
+function writeLocalData<T>(fileName: string, data: T) {
+  ensureLocalDbDir();
+  const filePath = path.join(LOCAL_DB_DIR, fileName);
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  } catch (err) {
+    console.error(`Failed to write local data for ${fileName}:`, err);
+  }
+}
+
 // Helper to fetch and sync/seed all errors from Firestore
 async function getErrorsFromFirestore(): Promise<ErrorRecord[]> {
   try {
@@ -113,6 +178,8 @@ async function getErrorsFromFirestore(): Promise<ErrorRecord[]> {
         client: data.client || "Standard SalesBuzz CL",
         isResolved: typeof data.isResolved === "boolean" ? data.isResolved : (data.solution && data.solution.trim() !== "" ? true : false),
         resolvedAt: data.resolvedAt || null,
+        createdBy: data.createdBy || "",
+        cretedby: data.cretedby || data.createdBy || ""
       });
     });
 
@@ -136,17 +203,59 @@ async function getErrorsFromFirestore(): Promise<ErrorRecord[]> {
           client: "Standard SalesBuzz CL",
           isResolved: isResolved,
           resolvedAt: isResolved ? item.createdAt : null,
+          createdBy: "system",
+          cretedby: "system"
         };
         await setDoc(doc(db, "errors", item.id), seededItem);
         errorsList.push({ id: item.id, ...seededItem });
       }
     }
+    // Set to successful if was failing but succeeded now
+    firestoreApiEnabledStatus = { ok: true, error: null };
+    // Update local cache
+    writeLocalData("errors.json", errorsList);
     return errorsList;
-  } catch (error) {
-    console.error("Failed to load/seed errors from Firestore, falling back to seed data:", error);
-    return SEED_DATA;
+  } catch (error: any) {
+    console.error("Failed to load/seed errors from Firestore, falling back to local file / seed data:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    firestoreApiEnabledStatus = { ok: false, error: errorMessage };
+    
+    // Read from local JSON fallback, seed defaults if empty
+    const local = readLocalData<ErrorRecord[]>("errors.json", []);
+    if (local.length === 0) {
+      const formattedSeed = SEED_DATA.map(item => ({
+        ...item,
+        errorType: "frontoffice",
+        errorCategory: "error",
+        errorPriority: "level 03",
+        client: "Standard SalesBuzz CL",
+        isResolved: !!(item.solution && item.solution.trim() !== ""),
+        resolvedAt: item.solution ? item.createdAt : null,
+        createdBy: "system",
+        cretedby: "system"
+      }));
+      writeLocalData("errors.json", formattedSeed);
+      return formattedSeed;
+    }
+    return local;
   }
 }
+
+// Startup background Firestore check
+async function verifyFirestoreOnStartup() {
+  try {
+    const errorCollection = collection(db, "errors");
+    const q = query(errorCollection, orderBy("createdAt", "desc"));
+    await getDocs(q);
+    firestoreApiEnabledStatus = { ok: true, error: null };
+    console.log("[Firestore Startup Check] Database is online and accessible!");
+  } catch (error: any) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[Firestore Startup Check] Pending activation / Access issues:", msg);
+    firestoreApiEnabledStatus = { ok: false, error: msg };
+  }
+}
+verifyFirestoreOnStartup();
 
 // Lazy Gemini client helper
 let aiClient: GoogleGenAI | null = null;
@@ -171,7 +280,7 @@ function getGeminiClient() {
 
 // Health Check endpoint
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
+  res.json({ status: "ok", firestore: firestoreApiEnabledStatus });
 });
 
 // 1. Get all documented SalesBuzz errors from Cloud Firestore
@@ -222,12 +331,21 @@ app.post("/api/errors", async (req, res) => {
       cretedby: cretedby || createdBy || ""
     };
 
-    // Save strictly to cloud database
-    await setDoc(doc(db, "errors", documentId), newError);
+    // Save strictly to cloud database but fallback to local file
+    try {
+      await setDoc(doc(db, "errors", documentId), newError);
+    } catch (writeErr: any) {
+      console.warn("Firestore save failed, falling back to local file:", writeErr);
+    }
+
+    // Save to local json file fallback
+    const currentLocal = readLocalData<ErrorRecord[]>("errors.json", []);
+    currentLocal.unshift({ id: documentId, ...newError });
+    writeLocalData("errors.json", currentLocal);
 
     res.status(201).json({ id: documentId, ...newError });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to persist to Firestore: " + err.message });
+    res.status(500).json({ error: "Failed to persist: " + err.message });
   }
 });
 
@@ -252,9 +370,25 @@ app.put("/api/errors/:id", async (req, res) => {
         if (existData.createdBy) originalCreatedBy = existData.createdBy;
         if (existData.cretedby) originalCretedby = existData.cretedby;
         if (existData.createdAt) originalCreatedAt = existData.createdAt;
+      } else {
+        // Check local database
+        const currentLocal = readLocalData<ErrorRecord[]>("errors.json", []);
+        const localRecord = currentLocal.find(e => e.id === id);
+        if (localRecord) {
+          if (localRecord.createdBy) originalCreatedBy = localRecord.createdBy;
+          if (localRecord.cretedby) originalCretedby = localRecord.cretedby;
+          if (localRecord.createdAt) originalCreatedAt = localRecord.createdAt;
+        }
       }
     } catch (docErr) {
       console.warn("Failed to retrieve existing doc for creator tracking:", docErr);
+      const currentLocal = readLocalData<ErrorRecord[]>("errors.json", []);
+      const localRecord = currentLocal.find(e => e.id === id);
+      if (localRecord) {
+        if (localRecord.createdBy) originalCreatedBy = localRecord.createdBy;
+        if (localRecord.cretedby) originalCretedby = localRecord.cretedby;
+        if (localRecord.createdAt) originalCreatedAt = localRecord.createdAt;
+      }
     }
 
     const updatedError = {
@@ -277,11 +411,26 @@ app.put("/api/errors/:id", async (req, res) => {
       cretedby: originalCretedby
     };
 
-    await setDoc(doc(db, "errors", id), updatedError);
+    try {
+      await setDoc(doc(db, "errors", id), updatedError);
+    } catch (writeErr) {
+      console.warn("Firestore update failed, writing locally:", writeErr);
+    }
+
+    // Save to local file cache
+    const currentLocal = readLocalData<ErrorRecord[]>("errors.json", []);
+    const idx = currentLocal.findIndex(e => e.id === id);
+    const fullRecord = { id, ...updatedError };
+    if (idx !== -1) {
+      currentLocal[idx] = fullRecord;
+    } else {
+      currentLocal.unshift(fullRecord);
+    }
+    writeLocalData("errors.json", currentLocal);
 
     res.json({ id, ...updatedError });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to update Firestore: " + err.message });
+    res.status(500).json({ error: "Failed to update: " + err.message });
   }
 });
 
@@ -293,23 +442,35 @@ app.post("/api/errors/bulk", async (req, res) => {
       return res.status(400).json({ error: "Invalid payload, Expected an array of rows." });
     }
 
-    const batch = writeBatch(db);
     const operationsResult: any[] = [];
     let count = 0;
+
+    // We'll prepare local database sync updates first
+    const currentLocal = readLocalData<ErrorRecord[]>("errors.json", []);
 
     for (const record of rows) {
       if (!record) continue;
       
       const isUpdate = !!record.id;
-      let docRef;
-
       if (isUpdate) {
-        docRef = doc(db, "errors", record.id);
-        // We only update the provided fields, removing 'id' to not store it in the document fields
         const updateData = { ...record };
         delete updateData.id;
         
-        batch.set(docRef, updateData, { merge: true });
+        // Try Firestore sync
+        try {
+          const docRef = doc(db, "errors", record.id);
+          await setDoc(docRef, updateData, { merge: true });
+        } catch (fErr) {
+          console.warn(`[Bulk Firestore Update Failed] id: ${record.id}:`, fErr);
+        }
+
+        // Update local file cache
+        const idx = currentLocal.findIndex(e => e.id === record.id);
+        if (idx !== -1) {
+          currentLocal[idx] = { ...currentLocal[idx], ...record };
+        } else {
+          currentLocal.push(record);
+        }
         operationsResult.push({ id: record.id, status: "updated" });
       } else {
         // App prefix calculation
@@ -320,7 +481,6 @@ app.post("/api/errors/bulk", async (req, res) => {
         else if (appLC.includes("routing")) prefix = "RO_err_";
         
         const generatedId = prefix + Date.now() + "_" + Math.random().toString(36).substr(2, 6) + count;
-        docRef = doc(db, "errors", generatedId);
         
         const newData = {
           application: record.application || "Other",
@@ -341,18 +501,24 @@ app.post("/api/errors/bulk", async (req, res) => {
           createdBy: record.createdBy || "system_import",
           cretedby: record.cretedby || record.createdBy || "system_import"
         };
-        batch.set(docRef, newData);
+
+        // Try Firestore sync
+        try {
+          const docRef = doc(db, "errors", generatedId);
+          await setDoc(docRef, newData);
+        } catch (fErr) {
+          console.warn(`[Bulk Firestore Creation Failed] id: ${generatedId}:`, fErr);
+        }
+
+        // Update local file cache
+        currentLocal.push({ id: generatedId, ...newData });
         operationsResult.push({ id: generatedId, status: "created" });
       }
       count++;
-      
-      // Firestore batch limit is 500
-      if (count % 400 === 0) {
-        await batch.commit(); // Note: we'd need a new batch here, but assuming rows < 400 for now. For safety, let's keep it simple.
-      }
     }
     
-    await batch.commit();
+    // Write full updated state to local cache
+    writeLocalData("errors.json", currentLocal);
     res.json({ success: true, message: `Bulk operation completed for ${count} records.`, results: operationsResult });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to perform bulk operation: " + err.message });
@@ -363,7 +529,18 @@ app.post("/api/errors/bulk", async (req, res) => {
 app.delete("/api/errors/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await deleteDoc(doc(db, "errors", id));
+    
+    try {
+      await deleteDoc(doc(db, "errors", id));
+    } catch (writeErr) {
+      console.warn("Firestore delete failed, falling back to local file delete:", writeErr);
+    }
+
+    // Delete locally
+    const currentLocal = readLocalData<ErrorRecord[]>("errors.json", []);
+    const filtered = currentLocal.filter(e => e.id !== id);
+    writeLocalData("errors.json", filtered);
+
     res.json({ success: true, message: `Error with ID ${id} deleted.` });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to delete from Firestore: " + err.message });
@@ -418,15 +595,22 @@ app.get("/api/config/permissions", async (req, res) => {
     const configDocRef = doc(db, "config", "permissions");
     const docSnap = await getDoc(configDocRef);
     if (docSnap.exists()) {
-      res.json(docSnap.data());
+      const data = docSnap.data();
+      writeLocalData("permissions.json", data);
+      res.json(data);
     } else {
       // Seed default configurations if not defined in Firestore yet
-      await setDoc(configDocRef, DEFAULT_PERMISSIONS);
+      try {
+        await setDoc(configDocRef, DEFAULT_PERMISSIONS);
+      } catch (writeErr) {
+        console.warn("Firestore permissions seed failed, keeping local seed instead:", writeErr);
+      }
+      writeLocalData("permissions.json", DEFAULT_PERMISSIONS);
       res.json(DEFAULT_PERMISSIONS);
     }
   } catch (err: any) {
-    console.log("Error reading permissions config from Firestore:", err);
-    res.json(DEFAULT_PERMISSIONS); // Safe fallback
+    console.log("Error reading permissions config from Firestore, loading local fallback:", err);
+    res.json(readLocalData("permissions.json", DEFAULT_PERMISSIONS));
   }
 });
 
@@ -443,8 +627,16 @@ app.post("/api/config/permissions", async (req, res) => {
       return res.status(400).json({ error: "Structure de permissions invalide." });
     }
 
-    const configDocRef = doc(db, "config", "permissions");
-    await setDoc(configDocRef, { ilivikUsers, publicUser, inviteUser: inviteUser || DEFAULT_PERMISSIONS.inviteUser });
+    const updatedPermissions = { ilivikUsers, publicUser, inviteUser: inviteUser || DEFAULT_PERMISSIONS.inviteUser };
+
+    try {
+      const configDocRef = doc(db, "config", "permissions");
+      await setDoc(configDocRef, updatedPermissions);
+    } catch (writeErr) {
+      console.warn("Firestore permissions save failed, saving locally:", writeErr);
+    }
+
+    writeLocalData("permissions.json", updatedPermissions);
     res.json({ success: true, message: "Configuration mise à jour dans la base Firestore !" });
   } catch (err: any) {
     res.status(500).json({ error: "Échec de l'enregistrement de la configuration: " + err.message });
@@ -457,13 +649,15 @@ app.get("/api/config/drive", async (req, res) => {
     const configDocRef = doc(db, "config", "drive");
     const docSnap = await getDoc(configDocRef);
     if (docSnap.exists()) {
-      res.json(docSnap.data());
+      const data = docSnap.data();
+      writeLocalData("drive.json", data);
+      res.json(data);
     } else {
-      res.json({ folderId: "" });
+      res.json(readLocalData<any>("drive.json", { folderId: "" }));
     }
   } catch (err: any) {
-    console.log("Error reading drive config from Firestore:", err);
-    res.json({ folderId: "" });
+    console.log("Error reading drive config from Firestore, loading local fallback:", err);
+    res.json(readLocalData<any>("drive.json", { folderId: "" }));
   }
 });
 
@@ -480,8 +674,17 @@ app.post("/api/config/drive", async (req, res) => {
       return res.status(400).json({ error: "ID du dossier Drive invalide ou trop long." });
     }
 
-    const configDocRef = doc(db, "config", "drive");
-    await setDoc(configDocRef, { folderId: folderId.trim() });
+    const driveConfig = readLocalData<any>("drive.json", { folderId: "" });
+    driveConfig.folderId = folderId.trim();
+
+    try {
+      const configDocRef = doc(db, "config", "drive");
+      await setDoc(configDocRef, driveConfig, { merge: true });
+    } catch (writeErr) {
+      console.warn("Firestore drive config save failed, saving locally:", writeErr);
+    }
+
+    writeLocalData("drive.json", driveConfig);
     res.json({ success: true, message: "ID de dossier Google Drive enregistré avec succès!" });
   } catch (err: any) {
     res.status(500).json({ error: "Échec de l'enregistrement de la configuration Drive: " + err.message });
@@ -494,13 +697,15 @@ app.get("/api/config/downloads_stats", async (req, res) => {
     const statsRef = doc(db, "config", "downloads_stats");
     const snap = await getDoc(statsRef);
     if (snap.exists()) {
-      res.json(snap.data());
+      const data = snap.data();
+      writeLocalData("downloads_stats.json", data);
+      res.json(data);
     } else {
-      res.json({});
+      res.json(readLocalData("downloads_stats.json", {}));
     }
   } catch (err: any) {
-    console.error("Failed to fetch download stats:", err);
-    res.json({});
+    console.error("Failed to fetch download stats from Firestore, loading local fallback:", err);
+    res.json(readLocalData("downloads_stats.json", {}));
   }
 });
 
@@ -510,13 +715,19 @@ app.post("/api/config/downloads_stats/:fileId", async (req, res) => {
     if (!fileId) {
       return res.status(400).json({ error: "ID de fichier requis" });
     }
-    const statsRef = doc(db, "config", "downloads_stats");
-    const snap = await getDoc(statsRef);
-    if (!snap.exists()) {
-      await setDoc(statsRef, { [fileId]: 1 });
-    } else {
+
+    // Read and update locally first
+    const currentStats = readLocalData<Record<string, number>>("downloads_stats.json", {});
+    currentStats[fileId] = (currentStats[fileId] || 0) + 1;
+    writeLocalData("downloads_stats.json", currentStats);
+
+    try {
+      const statsRef = doc(db, "config", "downloads_stats");
       await setDoc(statsRef, { [fileId]: increment(1) }, { merge: true });
+    } catch (writeErr) {
+      console.warn("Firestore downloads_stats increment failed, registered locally:", writeErr);
     }
+
     res.json({ success: true, message: "Téléchargement tracé avec succès" });
   } catch (err: any) {
     console.error("Failed to track download:", err);
@@ -537,13 +748,23 @@ app.post("/api/config/save_token", async (req, res) => {
       return res.status(403).json({ error: "Action interdite : seuls les membres de l'équipe Ilivik peuvent partager un jeton d'accès." });
     }
 
-    const configDocRef = doc(db, "config", "drive");
-    await setDoc(configDocRef, { 
-      latestAccessToken: token, 
-      tokenUpdatedBy: email, 
-      tokenUpdatedAt: Date.now() 
-    }, { merge: true });
+    const driveConfig = readLocalData<any>("drive.json", { folderId: "" });
+    driveConfig.latestAccessToken = token;
+    driveConfig.tokenUpdatedBy = email;
+    driveConfig.tokenUpdatedAt = Date.now();
 
+    try {
+      const configDocRef = doc(db, "config", "drive");
+      await setDoc(configDocRef, { 
+        latestAccessToken: token, 
+        tokenUpdatedBy: email, 
+        tokenUpdatedAt: driveConfig.tokenUpdatedAt 
+      }, { merge: true });
+    } catch (writeErr) {
+      console.warn("Firestore save token failed, saving locally:", writeErr);
+    }
+
+    writeLocalData("drive.json", driveConfig);
     res.json({ success: true, message: "Le jeton d'accès Google Drive partagé a été enregistré avec succès." });
   } catch (err: any) {
     console.error("Error saving shared token:", err);
@@ -554,14 +775,30 @@ app.post("/api/config/save_token", async (req, res) => {
 // Proxy list of files in the Google Drive folder using shared access token
 app.get("/api/drive/files", async (req, res) => {
   try {
-    const configDocRef = doc(db, "config", "drive");
-    const driveSnap = await getDoc(configDocRef);
-    if (!driveSnap.exists()) {
-      return res.json({ files: [], error: "Dossier Google Drive non configuré par le Super Admin." });
+    let folderId = "";
+    let latestAccessToken = "";
+    
+    try {
+      const configDocRef = doc(db, "config", "drive");
+      const driveSnap = await getDoc(configDocRef);
+      if (driveSnap.exists()) {
+        const data = driveSnap.data();
+        folderId = data.folderId || "";
+        latestAccessToken = data.latestAccessToken || "";
+      } else {
+        const local = readLocalData<any>("drive.json", { folderId: "" });
+        folderId = local.folderId || "";
+        latestAccessToken = local.latestAccessToken || "";
+      }
+    } catch (dbErr) {
+      console.warn("Firestore error reading drive file config, checking local db:", dbErr);
+      const local = readLocalData<any>("drive.json", { folderId: "" });
+      folderId = local.folderId || "";
+      latestAccessToken = local.latestAccessToken || "";
     }
-    const { folderId, latestAccessToken } = driveSnap.data();
+
     if (!folderId) {
-      return res.json({ files: [], error: "ID du dossier Google Drive manquant dans la configuration." });
+      return res.json({ files: [], error: "Dossier Google Drive non configuré par le Super Admin." });
     }
     
     // Fallback to query parameter token if available
@@ -631,6 +868,26 @@ app.get("/api/drive/download/:fileId", async (req, res) => {
   }
 });
 
+// Helpers for local users database cache
+function getLocalUsers(): Record<string, any> {
+  return readLocalData<Record<string, any>>("users.json", {
+    "hichem.b@ilivik.com": {
+      name: "Hichem B. (Super Admin)",
+      email: "hichem.b@ilivik.com",
+      password: "admin123",
+      status: "active",
+      role: "ilivikUsers",
+      createdAt: new Date().toISOString()
+    }
+  });
+}
+
+function saveLocalUser(email: string, userData: any) {
+  const users = getLocalUsers();
+  users[email.toLowerCase().trim()] = userData;
+  writeLocalData("users.json", users);
+}
+
 // 3.8 User Accounts Management (restricted to Super Admin hichem.b@ilivik.com)
 app.get("/api/users", async (req, res) => {
   try {
@@ -638,20 +895,35 @@ app.get("/api/users", async (req, res) => {
     if (!requester || requester.toLowerCase() !== "hichem.b@ilivik.com") {
       return res.status(403).json({ error: "Interdit. Seul le Super-Administrateur peut gérer les comptes." });
     }
-    const usersCollection = collection(db, "users");
-    const snapshot = await getDocs(usersCollection);
+    
     const usersList: any[] = [];
-    snapshot.forEach((snapshotDoc) => {
-      const data = snapshotDoc.data();
-      usersList.push({
-        name: data.name || "",
-        email: data.email || "",
-        password: data.password || "",
-        status: data.status || "active",
-        role: data.role || "ilivikUsers",
-        createdAt: data.createdAt || "",
+    try {
+      const usersCollection = collection(db, "users");
+      const snapshot = await getDocs(usersCollection);
+      snapshot.forEach((snapshotDoc) => {
+        const data = snapshotDoc.data();
+        usersList.push({
+          name: data.name || "",
+          email: data.email || "",
+          password: data.password || "",
+          status: data.status || "active",
+          role: data.role || "ilivikUsers",
+          createdAt: data.createdAt || "",
+        });
       });
-    });
+      // Synchronize to local
+      const localUsers = getLocalUsers();
+      usersList.forEach(u => {
+        localUsers[u.email] = u;
+      });
+      writeLocalData("users.json", localUsers);
+    } catch (firestoreErr) {
+      console.warn("Failed to get users from Firestore, fallback to local users file:", firestoreErr);
+      const localUsers = getLocalUsers();
+      Object.keys(localUsers).forEach(k => {
+        usersList.push(localUsers[k]);
+      });
+    }
     res.json(usersList);
   } catch (err: any) {
     res.status(500).json({ error: "Échec de récupération des utilisateurs: " + err.message });
@@ -668,20 +940,31 @@ app.post("/api/users", async (req, res) => {
     if (!email || !password || !name) {
       return res.status(400).json({ error: "Le nom, l'e-mail et le mot de passe sont obligatoires." });
     }
-    const userDocRef = doc(db, "users", email.toLowerCase().trim());
-    const userSnap = await getDoc(userDocRef);
-    if (userSnap.exists()) {
+    const emailKey = email.toLowerCase().trim();
+    
+    // Check local database first
+    const localUsers = getLocalUsers();
+    if (localUsers[emailKey]) {
       return res.status(400).json({ error: "Un utilisateur avec cet e-mail existe déjà." });
     }
+
     const newUser = {
       name: name.trim(),
-      email: email.toLowerCase().trim(),
+      email: emailKey,
       password: password,
       status: status || "active",
       role: role || "ilivikUsers",
       createdAt: new Date().toISOString(),
     };
-    await setDoc(userDocRef, newUser);
+
+    try {
+      const userDocRef = doc(db, "users", emailKey);
+      await setDoc(userDocRef, newUser);
+    } catch (writeErr) {
+      console.warn("Firestore set user failed, writing locally:", writeErr);
+    }
+
+    saveLocalUser(emailKey, newUser);
     res.status(201).json(newUser);
   } catch (err: any) {
     res.status(500).json({ error: "Échec de la création: " + err.message });
@@ -696,12 +979,28 @@ app.put("/api/users/:email", async (req, res) => {
     }
     const { email } = req.params;
     const { name, password, status, role } = req.body;
-    const userDocRef = doc(db, "users", email.toLowerCase().trim());
-    const userSnap = await getDoc(userDocRef);
-    if (!userSnap.exists()) {
+    const emailKey = email.toLowerCase().trim();
+
+    let existingData: any = null;
+    try {
+      const userDocRef = doc(db, "users", emailKey);
+      const userSnap = await getDoc(userDocRef);
+      if (userSnap.exists()) {
+        existingData = userSnap.data();
+      }
+    } catch (dbErr) {
+      console.warn("Firestore read for update failed, using local copy:", dbErr);
+    }
+
+    if (!existingData) {
+      const localUsers = getLocalUsers();
+      existingData = localUsers[emailKey];
+    }
+
+    if (!existingData) {
       return res.status(404).json({ error: "Utilisateur introuvable." });
     }
-    const existingData = userSnap.data();
+
     const updatedUser = {
       ...existingData,
       name: name !== undefined ? name.trim() : existingData.name,
@@ -709,7 +1008,15 @@ app.put("/api/users/:email", async (req, res) => {
       status: status !== undefined ? status : existingData.status,
       role: role !== undefined ? role : existingData.role,
     };
-    await setDoc(userDocRef, updatedUser);
+
+    try {
+      const userDocRef = doc(db, "users", emailKey);
+      await setDoc(userDocRef, updatedUser);
+    } catch (writeErr) {
+      console.warn("Firestore update user failed, updating locally:", writeErr);
+    }
+
+    saveLocalUser(emailKey, updatedUser);
     res.json(updatedUser);
   } catch (err: any) {
     res.status(500).json({ error: "Échec de la mise à jour: " + err.message });
@@ -723,8 +1030,19 @@ app.delete("/api/users/:email", async (req, res) => {
       return res.status(403).json({ error: "Interdit. Seul le Super-Administrateur peut gérer les comptes." });
     }
     const { email } = req.params;
-    const userDocRef = doc(db, "users", email.toLowerCase().trim());
-    await deleteDoc(userDocRef);
+    const emailKey = email.toLowerCase().trim();
+
+    try {
+      const userDocRef = doc(db, "users", emailKey);
+      await deleteDoc(userDocRef);
+    } catch (writeErr) {
+      console.warn("Firestore delete user failed, deleting locally:", writeErr);
+    }
+
+    const localUsers = getLocalUsers();
+    delete localUsers[emailKey];
+    writeLocalData("users.json", localUsers);
+
     res.json({ success: true, message: "Utilisateur supprimé de la base." });
   } catch (err: any) {
     res.status(500).json({ error: "Échec de la suppression: " + err.message });
@@ -743,8 +1061,21 @@ app.post("/api/users/sync-sso", async (req, res) => {
       return res.status(403).json({ error: "Accès refusé. Seuls les e-mails du domaine @ilivik.com sont autorisés." });
     }
 
-    const userDocRef = doc(db, "users", emailKey);
-    const userSnap = await getDoc(userDocRef);
+    let existingUser: any = null;
+    try {
+      const userDocRef = doc(db, "users", emailKey);
+      const userSnap = await getDoc(userDocRef);
+      if (userSnap.exists()) {
+        existingUser = userSnap.data();
+      }
+    } catch (dbErr) {
+      console.warn("Firestore SSO read failed, using local database:", dbErr);
+    }
+
+    if (!existingUser) {
+      const localUsers = getLocalUsers();
+      existingUser = localUsers[emailKey];
+    }
 
     let userRole = "ilivikUsers";
     let userStatus = "pending";
@@ -753,19 +1084,27 @@ app.post("/api/users/sync-sso", async (req, res) => {
       userStatus = "active";
     }
 
-    if (!userSnap.exists()) {
+    if (!existingUser) {
       const newUser = {
         name: displayName || (emailKey === "hichem.b@ilivik.com" ? "Hichem B. (Super Admin)" : "Membre Team Ilivik"),
         email: emailKey,
-        password: emailKey === "hichem.b@ilivik.com" ? "admin" : "google_sso",
+        password: emailKey === "hichem.b@ilivik.com" ? "admin123" : "google_sso",
         status: userStatus,
         role: userRole,
         createdAt: new Date().toISOString()
       };
-      await setDoc(userDocRef, newUser);
+      
+      try {
+        const userDocRef = doc(db, "users", emailKey);
+        await setDoc(userDocRef, newUser);
+      } catch (writeErr) {
+        console.warn("Firestore SSO register failed, saving locally:", writeErr);
+      }
+
+      saveLocalUser(emailKey, newUser);
       res.json({ success: true, created: true, user: newUser });
     } else {
-      res.json({ success: true, created: false, user: userSnap.data() });
+      res.json({ success: true, created: false, user: existingUser });
     }
   } catch (err: any) {
     console.error("SSO Sync error:", err);
@@ -785,22 +1124,31 @@ app.post("/api/users/signup", async (req, res) => {
       return res.status(400).json({ error: "Seuls les e-mails de domaine @ilivik.com sont autorisés." });
     }
 
-    const userDocRef = doc(db, "users", email.toLowerCase().trim());
-    const userSnap = await getDoc(userDocRef);
-    if (userSnap.exists()) {
+    const emailKey = email.toLowerCase().trim();
+
+    // Check existing
+    const localUsers = getLocalUsers();
+    if (localUsers[emailKey]) {
       return res.status(400).json({ error: "Un utilisateur avec cet e-mail existe déjà." });
     }
-    
+
     const newUser = {
       name: name.trim(),
-      email: email.toLowerCase().trim(),
+      email: emailKey,
       password: password,
-      status: "pending",
+      status: emailKey === "hichem.b@ilivik.com" ? "active" : "pending",
       role: "ilivikUsers",
       createdAt: new Date().toISOString(),
     };
     
-    await setDoc(userDocRef, newUser);
+    try {
+      const userDocRef = doc(db, "users", emailKey);
+      await setDoc(userDocRef, newUser);
+    } catch (writeErr) {
+      console.warn("Firestore signup failed, saving locally:", writeErr);
+    }
+
+    saveLocalUser(emailKey, newUser);
     res.status(201).json(newUser);
   } catch (err: any) {
     res.status(500).json({ error: "Échec de la création: " + err.message });
@@ -816,28 +1164,44 @@ app.post("/api/users/login", async (req, res) => {
 
     const emailKey = email.toLowerCase().trim();
     
-    // Auto-create admin if doesn't exist yet
-    if (emailKey === "hichem.b@ilivik.com") {
-      const adminDocRef = doc(db, "users", emailKey);
-      const adminSnap = await getDoc(adminDocRef);
-      if (!adminSnap.exists()) {
-        await setDoc(adminDocRef, {
-          name: "Hichem B. (Super Admin)",
-          email: "hichem.b@ilivik.com",
-          password: "admin123",
-          status: "active",
-          role: "ilivikUsers",
-          createdAt: new Date().toISOString()
-        });
+    // Auto-create admin in local database if doesn't exist yet
+    const localUsers = getLocalUsers();
+    if (emailKey === "hichem.b@ilivik.com" && !localUsers[emailKey]) {
+      const adminUser = {
+        name: "Hichem B. (Super Admin)",
+        email: "hichem.b@ilivik.com",
+        password: "admin123",
+        status: "active",
+        role: "ilivikUsers",
+        createdAt: new Date().toISOString()
+      };
+      try {
+        const adminDocRef = doc(db, "users", emailKey);
+        await setDoc(adminDocRef, adminUser);
+      } catch (writeErr) {
+        console.warn("Firestore auto-create admin failed, saving locally:", writeErr);
       }
+      saveLocalUser(emailKey, adminUser);
     }
 
-    const userDocRef = doc(db, "users", emailKey);
-    const userSnap = await getDoc(userDocRef);
-    if (!userSnap.exists()) {
+    let userData = getLocalUsers()[emailKey];
+    
+    // Attempt to verify with Firestore if possible
+    try {
+      const userDocRef = doc(db, "users", emailKey);
+      const userSnap = await getDoc(userDocRef);
+      if (userSnap.exists()) {
+        userData = userSnap.data();
+        // keep local up to date
+        saveLocalUser(emailKey, userData);
+      }
+    } catch (dbErr) {
+      console.warn("Firestore status verification during login ignored, using local file:", dbErr);
+    }
+
+    if (!userData) {
       return res.status(400).json({ error: "Identifiants incorrects ou compte inexistant." });
     }
-    const userData = userSnap.data();
     if (userData.password !== password) {
       return res.status(400).json({ error: "Identifiants incorrects (mot de passe invalide)." });
     }

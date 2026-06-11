@@ -39,6 +39,9 @@ export default function App() {
   // Navigation & View state
   const [activeTab, setActiveTab] = useState<"catalog" | "chat" | "add" | "attachments" | "datatable" | "webview">("catalog");
   
+  // Dynamic Firestore status report
+  const [firestoreStatus, setFirestoreStatus] = useState<{ ok: boolean; error: string | null } | null>(null);
+  
   // Data State
   const [errors, setErrors] = useState<ErrorRecord[]>([]);
   const [errorDisplayType, setErrorDisplayType] = useState<"resolved" | "unresolved" | "all">("unresolved");
@@ -354,8 +357,23 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  const checkFirestoreHealth = async () => {
+    try {
+      const response = await fetch("/api/health");
+      if (response.ok) {
+        const data = await response.json();
+        if (data.firestore) {
+          setFirestoreStatus(data.firestore);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not check Firestore health status:", e);
+    }
+  };
+
   // Retrieve errors Catalog & Custom Permissions on mount
   useEffect(() => {
+    checkFirestoreHealth();
     fetchErrors();
     fetchPermissions();
   }, []);
@@ -928,6 +946,50 @@ export default function App() {
   return (
     <div id="app-root" className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col p-4 sm:p-6 gap-6 selection:bg-indigo-500/30 selection:text-white max-w-7xl mx-auto w-full">
       
+      {/* Dynamic Firestore setup warning if not enabled */}
+      {firestoreStatus && !firestoreStatus.ok && (
+        (() => {
+          const isNotFound = firestoreStatus.error?.toLowerCase().includes("not_found") || 
+                             firestoreStatus.error?.toLowerCase().includes("not found") ||
+                             firestoreStatus.error?.toLowerCase().includes("code: 5") ||
+                             firestoreStatus.error?.toLowerCase().includes("database");
+          return (
+            <div className="bg-gradient-to-r from-red-500/10 via-amber-500/10 to-red-500/10 border border-red-500/30 p-3.5 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 text-xs shadow-lg backdrop-blur-sm animate-pulse">
+              <div className="flex items-center gap-3">
+                <span className="flex h-2.5 w-2.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                </span>
+                <div className="text-slate-200">
+                  {isNotFound ? (
+                    <span>
+                      <span className="font-bold text-amber-400">⚠️ Base de données Firestore manquante</span> : 
+                      L'API est activée, mais la base de données <code className="bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded text-indigo-300">(default)</code> n'existe pas encore dans votre console Firebase <code className="bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded text-indigo-300">ilivik-knowledg-base</code>. Cliquez sur le bouton pour la créer en quelques clics.
+                    </span>
+                  ) : (
+                    <span>
+                      <span className="font-bold text-red-400">⚠️ Configuration Firestore en attente</span> : 
+                      L'API Cloud Firestore n'est pas encore activée ou est désactivée dans votre projet Firebase <code className="bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded text-indigo-300">ilivik-knowledg-base</code>.
+                    </span>
+                  )}
+                </div>
+              </div>
+              <a 
+                href={isNotFound 
+                  ? "https://console.firebase.google.com/project/ilivik-knowledg-base/firestore" 
+                  : "https://console.developers.google.com/apis/api/firestore.googleapis.com/overview?project=ilivik-knowledg-base"
+                }
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="flex items-center gap-1.5 font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl cursor-pointer transition-all border border-indigo-500/30 shadow-md shadow-indigo-500/10 shrink-0 whitespace-nowrap"
+              >
+                {isNotFound ? "Créer la base de données" : "Activer l'API Firestore"} <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          );
+        })()
+      )}
+
       {/* Upper Brand Bar */}
       <header id="header-brand" className="flex flex-col sm:flex-row justify-between items-center bg-slate-900/65 backdrop-blur-md p-4 rounded-2xl border border-slate-800 shadow-xl gap-4">
         <div className="flex items-center gap-3">
