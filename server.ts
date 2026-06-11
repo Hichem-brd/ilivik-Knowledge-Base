@@ -1095,6 +1095,35 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
+
+    // Explicit assets MIME type interceptor middleware to handle environments where the container MIME database is missing/corrupted
+    app.use("/assets", (req, res, next) => {
+      let filePath = path.join(distPath, "assets", req.path);
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        filePath = path.join(__dirname, "assets", req.path);
+      }
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === ".js" || ext === ".mjs") {
+          res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+        } else if (ext === ".css") {
+          res.setHeader("Content-Type", "text/css; charset=utf-8");
+        } else if (ext === ".svg") {
+          res.setHeader("Content-Type", "image/svg+xml");
+        } else if (ext === ".png") {
+          res.setHeader("Content-Type", "image/png");
+        } else if (ext === ".jpg" || ext === ".jpeg") {
+          res.setHeader("Content-Type", "image/jpeg");
+        } else if (ext === ".json") {
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+        } else if (ext === ".ico") {
+          res.setHeader("Content-Type", "image/x-icon");
+        }
+        return res.sendFile(filePath);
+      }
+      next();
+    });
+
     app.use(
       express.static(distPath, {
         setHeaders: (res, filePath) => {
