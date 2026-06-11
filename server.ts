@@ -1096,57 +1096,63 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
 
-    // Explicit assets MIME type interceptor middleware to handle environments where the container MIME database is missing/corrupted
-    app.use("/assets", (req, res, next) => {
-      let filePath = path.join(distPath, "assets", req.path);
-      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-        filePath = path.join(__dirname, "assets", req.path);
-      }
+    // Deep server-authoritative static asset server with hardcoded MIME type overrides to bypass corrupt OS mime-db layers
+    app.use((req, res, next) => {
+      const cleanPath = req.path === "/" ? "/index.html" : req.path;
+      const filePath = path.join(distPath, cleanPath);
+
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         const ext = path.extname(filePath).toLowerCase();
+        let mimeType = "";
+
         if (ext === ".js" || ext === ".mjs") {
-          res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+          mimeType = "application/javascript; charset=utf-8";
         } else if (ext === ".css") {
-          res.setHeader("Content-Type", "text/css; charset=utf-8");
+          mimeType = "text/css; charset=utf-8";
+        } else if (ext === ".html") {
+          mimeType = "text/html; charset=utf-8";
         } else if (ext === ".svg") {
-          res.setHeader("Content-Type", "image/svg+xml");
+          mimeType = "image/svg+xml";
         } else if (ext === ".png") {
-          res.setHeader("Content-Type", "image/png");
+          mimeType = "image/png";
         } else if (ext === ".jpg" || ext === ".jpeg") {
-          res.setHeader("Content-Type", "image/jpeg");
-        } else if (ext === ".json") {
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          mimeType = "image/jpeg";
         } else if (ext === ".ico") {
-          res.setHeader("Content-Type", "image/x-icon");
+          mimeType = "image/x-icon";
+        } else if (ext === ".json") {
+          mimeType = "application/json; charset=utf-8";
+        } else if (ext === ".woff2") {
+          mimeType = "font/woff2";
+        } else if (ext === ".woff") {
+          mimeType = "font/woff";
+        } else if (ext === ".ttf") {
+          mimeType = "font/ttf";
         }
-        return res.sendFile(filePath);
+
+        if (mimeType) {
+          res.setHeader("Content-Type", mimeType);
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          fs.readFile(filePath, (err, data) => {
+            if (err) {
+              return next();
+            }
+            return res.send(data);
+          });
+          return;
+        }
       }
       next();
     });
 
-    app.use(
-      express.static(distPath, {
-        setHeaders: (res, filePath) => {
-          if (filePath.endsWith(".js") || filePath.endsWith(".mjs")) {
-            res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-          } else if (filePath.endsWith(".css")) {
-            res.setHeader("Content-Type", "text/css; charset=utf-8");
-          } else if (filePath.endsWith(".svg")) {
-            res.setHeader("Content-Type", "image/svg+xml");
-          } else if (filePath.endsWith(".png")) {
-            res.setHeader("Content-Type", "image/png");
-          } else if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) {
-            res.setHeader("Content-Type", "image/jpeg");
-          } else if (filePath.endsWith(".ico")) {
-            res.setHeader("Content-Type", "image/x-icon");
-          } else if (filePath.endsWith(".json")) {
-            res.setHeader("Content-Type", "application/json; charset=utf-8");
-          }
-        },
-      })
-    );
     app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      const indexPath = path.join(distPath, "index.html");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      fs.readFile(indexPath, (err, data) => {
+        if (err) {
+          return res.status(500).send("Error loading app");
+        }
+        return res.send(data);
+      });
     });
   }
 
