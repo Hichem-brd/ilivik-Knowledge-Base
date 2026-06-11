@@ -1,0 +1,41 @@
+{
+  "inviteUser": {
+    "allowAddError": false,
+    "allowAddTab": true,
+    "allowDeleteError": false,
+    "allowRecentErrors": true,
+    "allowAttachmentsSpace": true,
+    "allowUseAI": true,
+    "allowChatTab": true,
+    "allowEditSolution": false,
+    "allowChatActions": true,
+    "allowDatatable": false,
+    "allowCatalogTab": true
+  },
+  "publicUser": {
+    "allowDatatable": false,
+    "allowCatalogTab": true,
+    "allowAddError": false,
+    "allowAddTab": false,
+    "allowDeleteError": false,
+    "allowRecentErrors": false,
+    "allowAttachmentsSpace": false,
+    "allowChatTab": true,
+    "allowUseAI": true,
+    "allowEditSolution": false,
+    "allowChatActions": true
+  },
+  "ilivikUsers": {
+    "allowChatTab": true,
+    "allowUseAI": true,
+    "allowChatActions": true,
+    "allowEditSolution": true,
+    "allowRecentErrors": true,
+    "allowDeleteError": false,
+    "allowAttachmentsSpace": true,
+    "allowAddTab": true,
+    "allowAddError": true,
+    "allowCatalogTab": true,
+    "allowDatatable": false
+  }
+}

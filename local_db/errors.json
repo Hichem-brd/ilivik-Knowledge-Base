@@ -1,0 +1,77 @@
+[
+  {
+    "id": "err_seed_3",
+    "title": "Géolocalisation requise pour ouvrir la fiche client (GPS Bloqué)",
+    "errorCode": "SB-309",
+    "description": "Symptôme fréquent : L'utilisateur est face au client mais SalesBuzz affiche 'GPS precision accuracy below threshold' ou 'Écart de position trop élevé'. L'entrée ou le check-in de visite reste interdit.",
+    "solution": "1. S'assurer que le GPS est configuré en mode 'Haute précision' dans les réglages système de la tablette Android.\n2. Ouvrir l'application 'Google Maps' en tâche de fond pour accélérer la détection des coordonnées satellites actuelles.\n3. Sortir brièvement du bâtiment si le toit métallique de la boutique obstrue les ondes satellite GSM.\n4. Dans SalesBuzz, utiliser le bouton 'Rafraîchir les coordonnées client' pour re-calculer la distance de tolérance (qui doit être idéalement < 100 mètres).",
+    "imageUrl": "",
+    "solutionImageUrl": "",
+    "tags": [
+      "gps",
+      "visite",
+      "client",
+      "geolocalisation"
+    ],
+    "createdAt": "2026-06-04T11:00:00.000Z",
+    "author": "Hichem B.",
+    "errorType": "frontoffice",
+    "errorCategory": "error",
+    "errorPriority": "level 03",
+    "client": "Standard SalesBuzz CL",
+    "isResolved": true,
+    "resolvedAt": "2026-06-04T11:00:00.000Z",
+    "createdBy": "system",
+    "cretedby": "system"
+  },
+  {
+    "id": "err_seed_2",
+    "title": "Impossible de fermer la journée - Données en attente (EOD)",
+    "errorCode": "SB-102",
+    "description": "L'agent de vente tente de faire sa clôture de fin de journée, mais le bouton de validation de tournée reste grisé ou retourne 'EOD Sync Failed: unacknowledged transactions'.",
+    "solution": "1. Forcer l'arrêt de l'application SalesBuzz depuis les réglages système de la tablette.\n2. Basculer la tablette en mode Avion pendant 15 secondes pour réinitialiser le modem SIM data, puis le désactiver.\n3. Revenir dans SalesBuzz, accéder au menu latéral supérieur droit, choisir 'Vérification de la base de données' puis cliquer sur 'Forcer la synchronisation manuelle du journal des ventes'.\n4. Une fois la synchronisation réussie, le statut de fin de journée se verra validé.",
+    "imageUrl": "",
+    "solutionImageUrl": "",
+    "tags": [
+      "sync",
+      "fin de journee",
+      "reseau",
+      "eod"
+    ],
+    "createdAt": "2026-06-04T08:30:00.000Z",
+    "author": "Hichem B.",
+    "errorType": "frontoffice",
+    "errorCategory": "error",
+    "errorPriority": "level 03",
+    "client": "Standard SalesBuzz CL",
+    "isResolved": true,
+    "resolvedAt": "2026-06-04T08:30:00.000Z",
+    "createdBy": "system",
+    "cretedby": "system"
+  },
+  {
+    "id": "err_seed_1",
+    "title": "Imprimante thermique Bixolon non détectée pour le reçu",
+    "errorCode": "SB-204",
+    "description": "Lors de l'impression d'une facture, l'application SalesBuzz tourne en boucle puis affiche 'Printer Offline' ou 'Échec d'impression'. L'interfaçage Bluetooth semble coupé.",
+    "solution": "1. Éteindre l'imprimante Bixolon et la rallumer.\n2. Accéder aux paramètres Bluetooth de la tablette, oublier l'imprimante, puis l'associer à nouveau (le code PIN par défaut est 0000 ou 1234).\n3. Revenir sur SalesBuzz, aller dans 'Configuration Matériel' > 'Imprimante' et sélectionner à nouveau le périphérique trouvé.\n4. Faire un test de ticket de test. Si le problème persiste, vider le cache de l'application système 'Partage Bluetooth' de la tablette Android et redémarrer la tablette.",
+    "imageUrl": "",
+    "solutionImageUrl": "",
+    "tags": [
+      "imprimante",
+      "bluetooth",
+      "bixolon",
+      "impression"
+    ],
+    "createdAt": "2026-06-03T10:15:00.000Z",
+    "author": "Hichem B.",
+    "errorType": "frontoffice",
+    "errorCategory": "error",
+    "errorPriority": "level 03",
+    "client": "Standard SalesBuzz CL",
+    "isResolved": true,
+    "resolvedAt": "2026-06-03T10:15:00.000Z",
+    "createdBy": "system",
+    "cretedby": "system"
+  }
+]

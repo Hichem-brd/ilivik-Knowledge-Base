@@ -1,10 +1,10 @@
 {
-  "projectId": "gen-lang-client-0401375120",
-  "appId": "1:1097238780303:web:0f768cfcb91101137353fa",
-  "apiKey": "AIzaSyDW4pN164BhFjTnBRGiAjaKvWCnmKzJ-gY",
-  "authDomain": "gen-lang-client-0401375120.firebaseapp.com",
+  "projectId": "ilivik-knowledg-base",
+  "appId": "1:266253652729:web:ffe0b4e208271b0c848828",
+  "apiKey": "AIzaSyCZcGhObfPWoFrv52vx80m6e6cGf4R0QUA",
+  "authDomain": "ilivik-knowledg-base.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-f2ed5348-88a7-420f-9e90-fb9ea9479239",
-  "storageBucket": "gen-lang-client-0401375120.firebasestorage.app",
-  "messagingSenderId": "1097238780303",
-  "measurementId": ""
+  "storageBucket": "ilivik-knowledg-base.firebasestorage.app",
+  "messagingSenderId": "266253652729",
+  "measurementId": "G-602WSE1707"
 }
