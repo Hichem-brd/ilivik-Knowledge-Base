@@ -1103,43 +1103,38 @@ async function startServer() {
 
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         const ext = path.extname(filePath).toLowerCase();
-        let mimeType = "";
+        
+        const mimeTypes: { [key: string]: string } = {
+          ".js": "application/javascript; charset=utf-8",
+          ".mjs": "application/javascript; charset=utf-8",
+          ".css": "text/css; charset=utf-8",
+          ".html": "text/html; charset=utf-8",
+          ".svg": "image/svg+xml",
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".gif": "image/gif",
+          ".ico": "image/x-icon",
+          ".json": "application/json; charset=utf-8",
+          ".woff2": "font/woff2",
+          ".woff": "font/woff",
+          ".ttf": "font/ttf",
+          ".otf": "font/otf",
+          ".txt": "text/plain; charset=utf-8",
+          ".pdf": "application/pdf"
+        };
 
-        if (ext === ".js" || ext === ".mjs") {
-          mimeType = "application/javascript; charset=utf-8";
-        } else if (ext === ".css") {
-          mimeType = "text/css; charset=utf-8";
-        } else if (ext === ".html") {
-          mimeType = "text/html; charset=utf-8";
-        } else if (ext === ".svg") {
-          mimeType = "image/svg+xml";
-        } else if (ext === ".png") {
-          mimeType = "image/png";
-        } else if (ext === ".jpg" || ext === ".jpeg") {
-          mimeType = "image/jpeg";
-        } else if (ext === ".ico") {
-          mimeType = "image/x-icon";
-        } else if (ext === ".json") {
-          mimeType = "application/json; charset=utf-8";
-        } else if (ext === ".woff2") {
-          mimeType = "font/woff2";
-        } else if (ext === ".woff") {
-          mimeType = "font/woff";
-        } else if (ext === ".ttf") {
-          mimeType = "font/ttf";
-        }
-
-        if (mimeType) {
-          res.setHeader("Content-Type", mimeType);
-          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-          fs.readFile(filePath, (err, data) => {
-            if (err) {
-              return next();
-            }
-            return res.send(data);
-          });
-          return;
-        }
+        const mimeType = mimeTypes[ext] || "application/octet-stream";
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        
+        fs.readFile(filePath, (err, data) => {
+          if (err) {
+            return next();
+          }
+          return res.send(data);
+        });
+        return;
       }
       next();
     });
