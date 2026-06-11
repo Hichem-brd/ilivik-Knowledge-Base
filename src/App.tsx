@@ -29,9 +29,8 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { ErrorRecord, ChatMessage, RolePermissions, AppPermissionsConfig, UserAccount } from "./types";
-import { auth, googleProvider, db } from "./firebase";
+import { auth, googleProvider } from "./firebase";
 import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser, GoogleAuthProvider } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
 
 import AttachmentsSpace from "./AttachmentsSpace";
 import DatatableSpace from "./DatatableSpace";
@@ -42,7 +41,7 @@ export default function App() {
   
   // Data State
   const [errors, setErrors] = useState<ErrorRecord[]>([]);
-  const [errorDisplayType, setErrorDisplayType] = useState<"resolved" | "unresolved">("unresolved");
+  const [errorDisplayType, setErrorDisplayType] = useState<"resolved" | "unresolved" | "all">("unresolved");
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -51,7 +50,14 @@ export default function App() {
   });
 
   // Authentication & Member Access State
-  const [firebaseUser, setFirebaseUser] = useState<any | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<any | null>(() => {
+    try {
+      const stored = localStorage.getItem("sb_custom_user_session");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authPurpose, setAuthPurpose] = useState<"add" | "edit" | "delete" | "general">("general");
 
@@ -70,7 +76,14 @@ export default function App() {
       allowChatActions: true,
       allowRecentErrors: true,
       allowAttachmentsSpace: true,
-      allowDatatable: false
+      allowDatatable: false,
+      allowStatsBlocks: true,
+      allowDownloadAttachments: true,
+      allowDatatableImportBulk: true,
+      allowDatatableExportPdf: true,
+      allowDatatableExportExcel: true,
+      allowDatatableImportTemplate: true,
+      allowDatatableActions: true
     },
     publicUser: {
       allowCatalogTab: true,
@@ -83,7 +96,14 @@ export default function App() {
       allowChatActions: true,
       allowRecentErrors: false,
       allowAttachmentsSpace: false,
-      allowDatatable: false
+      allowDatatable: false,
+      allowStatsBlocks: true,
+      allowDownloadAttachments: false,
+      allowDatatableImportBulk: false,
+      allowDatatableExportPdf: false,
+      allowDatatableExportExcel: false,
+      allowDatatableImportTemplate: false,
+      allowDatatableActions: false
     },
     inviteUser: {
       allowCatalogTab: true,
@@ -96,7 +116,14 @@ export default function App() {
       allowChatActions: true,
       allowRecentErrors: true,
       allowAttachmentsSpace: true,
-      allowDatatable: false
+      allowDatatable: false,
+      allowStatsBlocks: true,
+      allowDownloadAttachments: true,
+      allowDatatableImportBulk: false,
+      allowDatatableExportPdf: false,
+      allowDatatableExportExcel: false,
+      allowDatatableImportTemplate: false,
+      allowDatatableActions: false
     }
   };
 
@@ -126,6 +153,7 @@ export default function App() {
   const [formDescription, setFormDescription] = useState("");
   const [formSolution, setFormSolution] = useState("");
   const [formImage, setFormImage] = useState<string>(""); // Base64
+  const [formSolutionImage, setFormSolutionImage] = useState<string>(""); // Base64
   const [formTags, setFormTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState("");
   const [formAuthor, setFormAuthor] = useState("");
@@ -147,6 +175,8 @@ export default function App() {
   const [formErrorCategory, setFormErrorCategory] = useState("manipulation");
   const [formErrorPriority, setFormErrorPriority] = useState("level 03");
   const [formClient, setFormClient] = useState("");
+  const [formApplication, setFormApplication] = useState("Salesbuzz");
+  const [formCustomApplication, setFormCustomApplication] = useState("");
 
   // User Accounts States for Super-Admin console
   const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
@@ -181,11 +211,13 @@ export default function App() {
   // Solution editing inside modal
   const [isEditingSolution, setIsEditingSolution] = useState(false);
   const [solutionInput, setSolutionInput] = useState("");
+  const [solutionImageInput, setSolutionImageInput] = useState<string>("");
 
   const handleSelectError = (err: ErrorRecord | null) => {
     setViewingErrorDetail(err);
     setIsEditingSolution(false);
     setSolutionInput(err ? err.solution || "" : "");
+    setSolutionImageInput(err ? err.solutionImageUrl || "" : "");
   };
 
   const handleSaveSolution = async () => {
@@ -197,6 +229,7 @@ export default function App() {
       const updatedRecord: ErrorRecord = {
         ...viewingErrorDetail,
         solution: solutionInput.trim(),
+        solutionImageUrl: solutionImageInput,
         isResolved: hasSolution,
         resolvedAt: hasSolution ? (viewingErrorDetail.resolvedAt || new Date().toISOString()) : null,
       };
@@ -245,64 +278,50 @@ export default function App() {
           return;
         }
 
-        // Role & Status validation for @ilivik.com users
+        // Role & Status validation for @ilivik.com users via backend synchronization
         if (fUser.email) {
           try {
-            const emailKey = fUser.email.toLowerCase().trim();
-            const userDocRef = doc(db, "users", emailKey);
-            const userSnap = await getDoc(userDocRef);
-            
-            if (emailKey === "hichem.b@ilivik.com") {
-              // Superadmin is always allowed, auto-create if missing
-              if (!userSnap.exists()) {
-                await setDoc(userDocRef, {
-                  name: fUser.displayName || "Hichem B. (Super Admin)",
-                  email: emailKey,
-                  password: "admin",
-                  status: "active",
-                  role: "ilivikUsers",
-                  createdAt: new Date().toISOString()
-                });
-              }
-            } else {
-              if (!userSnap.exists()) {
-                 // Create pending user
-                 await setDoc(userDocRef, {
-                   name: fUser.displayName || "Membre Team Ilivik",
-                   email: emailKey,
-                   password: "google_sso",
-                   status: "pending",
-                   role: "ilivikUsers",
-                   createdAt: new Date().toISOString()
-                 });
-                 setLoginError("Votre compte est en attente de validation par le Super-Administrateur.");
-                 setAuthPurpose("general");
-                 setShowAuthModal(true);
-                 await signOut(auth);
-                 setFirebaseUser(null);
-                 return;
-              } else {
-                 const userData = userSnap.data();
-                 if (userData.status === "pending") {
-                   setLoginError("Votre compte est toujours en attente de validation.");
-                   setAuthPurpose("general");
-                   setShowAuthModal(true);
-                   await signOut(auth);
-                   setFirebaseUser(null);
-                   return;
-                 }
-                 if (userData.status === "disabled") {
-                   setLoginError("Votre compte a été suspendu par le Super-Administrateur.");
-                   setAuthPurpose("general");
-                   setShowAuthModal(true);
-                   await signOut(auth);
-                   setFirebaseUser(null);
-                   return;
-                 }
-              }
+            const syncResponse = await fetch("/api/users/sync-sso", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: fUser.email,
+                displayName: fUser.displayName || ""
+              })
+            });
+
+            if (!syncResponse.ok) {
+              const errData = await syncResponse.json();
+              setLoginError(errData.error || "Échec de synchronisation de session.");
+              setAuthPurpose("general");
+              setShowAuthModal(true);
+              await signOut(auth);
+              setFirebaseUser(null);
+              return;
+            }
+
+            const syncResult = await syncResponse.json();
+            const userData = syncResult.user || {};
+
+            if (userData.status === "pending") {
+              setLoginError("Votre compte est en attente de validation par le Super-Administrateur.");
+              setAuthPurpose("general");
+              setShowAuthModal(true);
+              await signOut(auth);
+              setFirebaseUser(null);
+              return;
+            }
+
+            if (userData.status === "disabled") {
+              setLoginError("Votre compte a été suspendu par le Super-Administrateur.");
+              setAuthPurpose("general");
+              setShowAuthModal(true);
+              await signOut(auth);
+              setFirebaseUser(null);
+              return;
             }
           } catch (e) {
-            console.error("Error validating user status:", e);
+            console.error("Error validating user status via SSO sync:", e);
           }
         }
 
@@ -311,7 +330,21 @@ export default function App() {
         setCurrentUser(displayName);
         setFormAuthor(displayName);
         localStorage.setItem("sb_support_user", displayName);
+        localStorage.removeItem("sb_custom_user_session");
       } else {
+        const stored = localStorage.getItem("sb_custom_user_session");
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            setFirebaseUser(parsed);
+            setCurrentUser(parsed.displayName);
+            setFormAuthor(parsed.displayName);
+            localStorage.setItem("sb_support_user", parsed.displayName);
+            return;
+          } catch {
+            // fall through
+          }
+        }
         setFirebaseUser(null);
         setCurrentUser("Team Ilivik Membre");
         setFormAuthor("Team Ilivik Membre");
@@ -398,7 +431,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.error("Error fetching permissions:", err);
+      console.log("Les permissions locales sont appliquées (backend injoignable).");
     }
   };
 
@@ -424,10 +457,41 @@ export default function App() {
         setFirebaseUser(null);
         return;
       }
+
+      // Share the Google Workspace Access Token on the server for all authenticated users to share
+      if (credential?.accessToken && user.email) {
+        try {
+          await fetch("/api/config/save_token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: credential.accessToken, email: user.email })
+          });
+        } catch (tokenErr) {
+          console.error("Error saving shared Google access token on server:", tokenErr);
+        }
+      }
+
       setShowAuthModal(false);
     } catch (err: any) {
       console.error("Firebase Login Error:", err);
-      setLoginError("Échec de la connexion Google.");
+      
+      let message = "Échec de la connexion Google.";
+      let hint = "";
+      if (window.self !== window.top) {
+        hint = " Conseil : Comme l'application tourne dans l'aperçu intégré (iframe), les politiques de sécurité de votre navigateur bloquent parfois la fenêtre de connexion Google. Veuillez ouvrir l'application dans un nouvel onglet (en cliquant sur l'icône de flèche en haut à droite) pour vous connecter sans encombre.";
+      }
+
+      if (err.code === "auth/popup-closed-by-user") {
+        message = "La fenêtre de connexion Google a été fermée avant la fin de l'authentification." + hint;
+      } else if (err.code === "auth/cancelled-popup-request") {
+        message = "La tentative de connexion Google a été annulée. Une autre opération d'authentification était peut-être en cours, ou le navigateur a bloqué la fenêtre." + hint;
+      } else if (err.code === "auth/popup-blocked") {
+        message = "La fenêtre de connexion Google a été bloquée par le bloqueur de pop-up de votre navigateur." + (hint || " Veuillez autoriser les fenêtres pop-up pour ce site.");
+      } else {
+        message = `Échec de la connexion Google : ${err.message || err}`;
+      }
+      
+      setLoginError(message);
     }
   };
 
@@ -485,6 +549,7 @@ export default function App() {
           setCurrentUser(data.name);
           setFormAuthor(data.name);
           localStorage.setItem("sb_support_user", data.name);
+          localStorage.setItem("sb_custom_user_session", JSON.stringify(customUser));
 
           setLoginEmail("");
           setLoginPassword("");
@@ -505,9 +570,11 @@ export default function App() {
     } catch (err) {
       console.error(err);
     }
+    setFirebaseUser(null);
     setCurrentUser("Team Ilivik Membre");
     setFormAuthor("Team Ilivik Membre");
     localStorage.removeItem("sb_support_user");
+    localStorage.removeItem("sb_custom_user_session");
   };
 
   useEffect(() => {
@@ -515,6 +582,55 @@ export default function App() {
       chatEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [chatMessages, isAiLoading]);
+
+  const renderMessageContent = (content: string) => {
+    const regex = /([A-Z0-9]+-[A-Z0-9]+)/gi;
+    const parts = content.split(regex);
+    return parts.map((part, i) => {
+      if (/^[A-Z0-9]+-[A-Z0-9]+$/i.test(part)) {
+        const matchingError = errors.find(
+          (e) => e.errorCode && e.errorCode.toUpperCase() === part.toUpperCase()
+        );
+        if (matchingError) {
+          return (
+            <button
+              type="button"
+              key={i}
+              onClick={() => handleSelectError(matchingError)}
+              className="px-1.5 py-0.5 bg-indigo-500/20 text-indigo-300 text-[10.5px] font-bold rounded hover:bg-indigo-500/40 transition-colors mx-0.5 border border-indigo-500/20 shadow-sm"
+            >
+              {part}
+            </button>
+          );
+        }
+      }
+      return <span key={i}>{part}</span>;
+    });
+  };
+
+  const renderSolutionImagesForMessage = (content: string) => {
+    const regex = /([A-Z0-9]+-[A-Z0-9]+)/gi;
+    const matches = content.match(regex) || [];
+    const uniqueCodes = Array.from(new Set(matches.map((c) => c.toUpperCase())));
+    
+    return uniqueCodes.map((code) => {
+      const matchingError = errors.find((e) => e.errorCode && e.errorCode.toUpperCase() === code);
+      if (matchingError && matchingError.solutionImageUrl) {
+        return (
+          <div key={`sol-${matchingError.id}`} className="mt-3.5 flex flex-col gap-1.5 bg-slate-950/80 p-2.5 rounded-xl border border-emerald-900/40 shadow-inner">
+            <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Solution Visuelle ({matchingError.errorCode})
+            </span>
+            <div className="rounded-lg overflow-hidden border border-slate-800 bg-slate-900 flex justify-center mt-1">
+              <img src={matchingError.solutionImageUrl} className="w-full object-contain max-h-[160px]" alt={`Solution for ${matchingError.errorCode}`} />
+            </div>
+          </div>
+        );
+      }
+      return null;
+    });
+  };
 
   const fetchErrors = async () => {
     setIsLoading(true);
@@ -524,10 +640,10 @@ export default function App() {
         const data = await response.json();
         setErrors(data);
       } else {
-        console.error("Failed to load catalog data from server");
+        console.log("Les données du catalogue n'ont pas pu être chargées depuis le serveur.");
       }
     } catch (err) {
-      console.error("Network error loading catalog", err);
+      console.log("Catalogue indisponible (mode hors ligne ou chargement).");
     } finally {
       setIsLoading(false);
     }
@@ -581,14 +697,27 @@ export default function App() {
     setFormTags(formTags.filter((_, i) => i !== index));
   };
 
+  const handleInlineSolutionFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSolutionImageInput(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   // Convert files to base64
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, target: "form" | "chat") => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, target: "form" | "chat" | "solution") => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
         if (target === "form") {
           setFormImage(reader.result as string);
+        } else if (target === "solution") {
+          setFormSolutionImage(reader.result as string);
         } else {
           setChatImage(reader.result as string);
         }
@@ -600,8 +729,8 @@ export default function App() {
   // Submit new error manual logging
   const handleAddErrorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle || !formDescription) {
-      setSubmitStatus({ success: false, message: "Veuillez remplir le titre et la description de la panne." });
+    if (!formTitle || !formDescription || !formClient || !formClient.trim()) {
+      setSubmitStatus({ success: false, message: "Veuillez remplir le titre, la description de la panne et le nom du client." });
       return;
     }
 
@@ -611,16 +740,23 @@ export default function App() {
     const isResolvedVal = !!(formSolution && formSolution.trim() !== "");
     const resolvedAtVal = isResolvedVal ? new Date().toISOString() : null;
 
+    const clientSuffix = formClient.trim().substring(0, 3).toUpperCase();
+    const generatedErrorCode = `${String(errors.length + 1).padStart(3, '0')}-${clientSuffix}`;
+
     try {
+      const finalApplication = formApplication === "Other" ? formCustomApplication.trim() || "Other" : formApplication;
+
       const response = await fetch("/api/errors", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          application: finalApplication,
           title: formTitle,
-          errorCode: formCode,
+          errorCode: generatedErrorCode,
           description: formDescription,
           solution: formSolution,
           imageUrl: formImage,
+          solutionImageUrl: formSolutionImage,
           tags: formTags,
           author: formAuthor,
           errorType: formErrorType,
@@ -629,6 +765,8 @@ export default function App() {
           client: formClient,
           isResolved: isResolvedVal,
           resolvedAt: resolvedAtVal,
+          createdBy: firebaseUser?.email || "Team Ilivik Membre Code",
+          cretedby: firebaseUser?.email || "Team Ilivik Membre Code",
         }),
       });
 
@@ -638,11 +776,14 @@ export default function App() {
           : "Fiche d'erreur créée ! Elle est archivée en attente de solution.";
         setSubmitStatus({ success: true, message: successMessage });
         // Clear Form fields
+        setFormApplication("Salesbuzz");
+        setFormCustomApplication("");
         setFormTitle("");
         setFormCode("");
         setFormDescription("");
         setFormSolution("");
         setFormImage("");
+        setFormSolutionImage("");
         setFormTags([]);
         setFormErrorType("frontoffice");
         setFormErrorCategory("manipulation");
@@ -698,6 +839,8 @@ export default function App() {
           content: m.content,
         }));
 
+      const googleAccessToken = (window as any).__GOOGLE_ACCESS_TOKEN__ || "";
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -705,6 +848,7 @@ export default function App() {
           query: userQuery,
           image: attachedImg,
           chatHistory: history,
+          googleAccessToken,
         }),
       });
 
@@ -787,11 +931,9 @@ export default function App() {
       {/* Upper Brand Bar */}
       <header id="header-brand" className="flex flex-col sm:flex-row justify-between items-center bg-slate-900/65 backdrop-blur-md p-4 rounded-2xl border border-slate-800 shadow-xl gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <Zap className="h-6 w-6 text-white text-indigo-400 fill-current animate-pulse" />
-          </div>
+          <img src="https://gdm-catalog-fmapi-prod.imgix.net/ProductLogo/790eed34-7b2b-45dd-a139-5206e4dcaea5.jpeg" alt="SalesBuzz Logo" className="w-10 h-10 rounded-xl object-contain shadow-lg shadow-indigo-500/20" />
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+            <h1 className="text-xl font-bold tracking-tight text-slate-100 flex items-center gap-2">
               SalesBuzz <span className="text-indigo-400 font-semibold text-xs bg-indigo-950/80 border border-indigo-500/30 px-2.5 py-0.5 rounded-full uppercase tracking-wider">KnowledgeBase</span>
             </h1>
             <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">Team Ilivik Central Hub</p>
@@ -959,7 +1101,7 @@ export default function App() {
           <div id="view-catalog" className="grid grid-cols-12 gap-5 flex-grow items-start min-h-0">
             
             {/* Card A: Search & Tags (cols 12, lg:col-span-8) */}
-            <section id="bento-search-block" className="col-span-12 lg:col-span-8 bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col justify-center relative overflow-hidden shadow-2xl min-h-[180px] lg:h-[200px]">
+            <section id="bento-search-block" className="col-span-12 lg:col-span-8 bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col justify-center relative overflow-hidden shadow-2xl min-h-[180px] lg:min-h-[200px] h-auto lg:h-auto py-5 lg:py-6">
               <div className="absolute top-0 right-0 p-8 opacity-5">
                 <Search className="w-32 h-32 text-indigo-400" />
               </div>
@@ -975,7 +1117,7 @@ export default function App() {
                     placeholder="Entrez l'erreur (ex: Sync Error 403, SB-102)..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-850 focus:border-indigo-500/80 rounded-xl py-3.5 px-5 pl-12 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm sm:text-lg text-white placeholder-slate-500 font-medium transition-all"
+                    className="w-full bg-slate-950 border border-slate-850 focus:border-indigo-500/80 rounded-xl py-3.5 px-5 pl-12 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm sm:text-lg text-slate-100 placeholder-slate-500 font-medium transition-all"
                   />
                   {searchQuery && (
                     <button
@@ -1025,15 +1167,14 @@ export default function App() {
 
             {/* Card B: AI Assistant Panel / Chat flow (cols 12, lg:col-span-4) */}
             <section id="bento-ai-panel" className="col-span-12 lg:col-span-4 lg:row-span-2 bg-indigo-950/20 rounded-3xl border border-indigo-500/30 p-5 flex flex-col h-[420px] lg:h-[504px] shadow-2xl">
-              <div className="flex justify-between items-center mb-3">
+              <div className="flex items-center mb-3">
                 <div className="flex items-center gap-2">
                   <span className="relative flex h-3 w-3">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-500"></span>
                   </span>
-                  <h3 className="font-bold text-indigo-100 text-sm">Assistant IA Ilivik</h3>
+                  <h3 className="font-bold text-slate-100 text-sm">ilivik AI</h3>
                 </div>
-                <span className="text-[9px] bg-indigo-900/50 px-2 py-0.5 rounded text-indigo-300 font-bold uppercase tracking-wider">RAG Actif</span>
               </div>
 
               {/* Chat Messages flow */}
@@ -1055,7 +1196,8 @@ export default function App() {
                           : "bg-slate-900 border-slate-800 text-slate-200 rounded-tl-none"
                       }`}
                     >
-                      {msg.content}
+                      {renderMessageContent(msg.content)}
+                      {msg.role !== "user" && renderSolutionImagesForMessage(msg.content)}
                       {msg.image && (
                         <div className="mt-2.5 rounded-lg overflow-hidden border border-slate-800 max-w-xs max-h-[120px]">
                           <img src={msg.image} className="w-full h-full object-cover" alt="Chat attachment" />
@@ -1111,7 +1253,7 @@ export default function App() {
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     placeholder="Posez une question ou joignez une photo..."
-                    className="bg-slate-950 border border-slate-850 rounded-xl px-3 py-2.5 text-xs flex-grow text-white focus:outline-none focus:border-indigo-500 placeholder-slate-500"
+                    className="bg-slate-950 border border-slate-850 rounded-xl px-3 py-2.5 text-xs flex-grow text-slate-100 focus:outline-none focus:border-indigo-500 placeholder-slate-500"
                   />
                   <button
                     id="chat-send-btn"
@@ -1125,12 +1267,18 @@ export default function App() {
               </form>
             </section>
 
-            {/* Card C: Recent Errors Catalog (cols 12, lg:col-span-5) */}
+            {/* Card C: Recent Errors Catalog (cols 12, lg:col-span-8) */}
             {getPermission("allowRecentErrors") && (
-            <section id="bento-errors-block" className="col-span-12 lg:col-span-5 bg-slate-900 border border-slate-800 rounded-3xl p-5 flex flex-col h-[288px] shadow-2xl overflow-hidden">
+            <section id="bento-errors-block" className="col-span-12 lg:col-span-8 bg-slate-900 border border-slate-800 rounded-3xl p-5 flex flex-col h-[288px] shadow-2xl overflow-hidden">
               <div className="flex justify-between items-center mb-3.5">
-                <h3 className="font-bold text-slate-200 text-sm">Erreurs Récentes ({filteredErrors.filter(e => errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).length})</h3>
+                <h3 className="font-bold text-slate-200 text-sm">Erreurs Récentes ({filteredErrors.filter(e => errorDisplayType === "all" ? true : errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).length})</h3>
                 <div className="flex gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                  <button 
+                    onClick={() => setErrorDisplayType("all")}
+                    className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider transition-all ${errorDisplayType === "all" ? "bg-indigo-950/60 text-indigo-400 border border-indigo-500/20" : "text-slate-500 hover:text-slate-300"}`}
+                  >
+                    Tous
+                  </button>
                   <button 
                     onClick={() => setErrorDisplayType("unresolved")}
                     className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider transition-all ${errorDisplayType === "unresolved" ? "bg-amber-950/60 text-amber-400 border border-amber-500/20" : "text-slate-500 hover:text-slate-300"}`}
@@ -1153,12 +1301,12 @@ export default function App() {
                     <div className="border-2 border-slate-700 border-t-indigo-400 rounded-full h-5 w-5 animate-spin mb-2"></div>
                     <span>Chargement de la base Firestore...</span>
                   </div>
-                ) : filteredErrors.filter(e => errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).length === 0 ? (
+                ) : filteredErrors.filter(e => errorDisplayType === "all" ? true : errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).length === 0 ? (
                   <div className="py-12 text-center text-slate-500 text-xs">
                     Aucune fiche ne correspond à votre filtre.
                   </div>
                 ) : (
-                  filteredErrors.filter(e => errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).map((err) => (
+                  filteredErrors.filter(e => errorDisplayType === "all" ? true : errorDisplayType === "resolved" ? e.isResolved : !e.isResolved).map((err) => (
                     <div
                       key={err.id}
                       onClick={() => handleSelectError(err)}
@@ -1227,18 +1375,29 @@ export default function App() {
             </section>
             )}
 
-            {/* Card D: Stats Block (cols 12, lg:col-span-3) */}
-            <section id="bento-stats-block" className="col-span-12 sm:col-span-6 lg:col-span-3 bg-slate-900 rounded-3xl border border-slate-800 p-5 flex flex-col justify-center items-center gap-1 shadow-2xl h-[134px] hover:border-slate-700 transition-all">
-              <div className="text-4xl font-extrabold text-indigo-450 tracking-tight">{errors.length}</div>
-              <div className="text-[10px] font-bold uppercase text-slate-400 tracking-widest text-center mt-1">Solutions Enregistrées</div>
-              <div className="text-[9px] text-slate-500">Base SalesBuzz consolidée</div>
-            </section>
+            {/* Stats Blocks */}
+            {getPermission("allowStatsBlocks") && (
+              <>
+                {/* Stats Block 1: Solutions Apportées */}
+                <section className={`col-span-6 ${getPermission("allowAddTab") ? "lg:col-span-4" : "lg:col-span-6"} bg-slate-900 rounded-3xl border border-slate-800 p-3 sm:p-5 flex flex-col justify-center items-center gap-1 shadow-2xl h-[134px] xl:h-[150px] hover:border-slate-700 transition-all`}>
+                  <div className="text-3xl sm:text-4xl font-extrabold text-emerald-400 tracking-tight leading-none">{errors.filter(e => e.isResolved).length}</div>
+                  <div className="text-[9px] sm:text-[10px] font-bold uppercase text-slate-400 tracking-wider text-center mt-2">Solutions Apportées</div>
+                </section>
+                
+                {/* Stats Block 2: Erreurs Signalées */}
+                <section className={`col-span-6 ${getPermission("allowAddTab") ? "lg:col-span-4" : "lg:col-span-6"} bg-slate-900 rounded-3xl border border-slate-800 p-3 sm:p-5 flex flex-col justify-center items-center gap-1 shadow-2xl h-[134px] xl:h-[150px] hover:border-slate-700 transition-all`}>
+                  <div className="text-3xl sm:text-4xl font-extrabold text-indigo-450 tracking-tight leading-none">{errors.length}</div>
+                  <div className="text-[9px] sm:text-[10px] font-bold uppercase text-slate-400 tracking-wider text-center mt-2">Erreurs Signalées</div>
+                </section>
+              </>
+            )}
 
-            {/* Card E: Quick Add Shortcut Card (cols 12, lg:col-span-3) */}
+            {/* Card E: Quick Add Shortcut Card (cols 12, lg:col-span-4) */}
+            {getPermission("allowAddTab") && (
             <section
               id="bento-quick-add-block"
               onClick={() => setActiveTab("add")}
-              className="col-span-12 sm:col-span-6 lg:col-span-3 bg-indigo-600 hover:bg-indigo-550 rounded-3xl p-5 flex flex-col justify-center items-center text-center cursor-pointer transition-all hover:scale-[1.02] shadow-xl shadow-indigo-950/40 text-white h-[134px]"
+              className="col-span-12 sm:col-span-6 lg:col-span-4 bg-indigo-600 hover:bg-indigo-550 rounded-3xl p-5 flex flex-col justify-center items-center text-center cursor-pointer transition-all hover:scale-[1.02] shadow-xl shadow-indigo-950/40 text-white h-[134px] xl:h-[150px]"
             >
               <div className="bg-white/15 p-2 rounded-full mb-1">
                 <Plus className="h-5 w-5 text-white" />
@@ -1246,6 +1405,7 @@ export default function App() {
               <span className="font-bold text-xs">Ajouter une Erreur</span>
               <span className="text-[9px] opacity-80 mt-0.5">Pour l'équipe Ilivik</span>
             </section>
+            )}
 
           </div>
         )}
@@ -1260,7 +1420,7 @@ export default function App() {
                 <span className="px-2.5 py-1 bg-indigo-600 text-white rounded text-[9px] font-extrabold tracking-wider uppercase">Fuzzy Vision Match</span>
                 <h3 className="text-sm font-bold text-slate-100 mt-3">Analyse Intelligente</h3>
                 <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                  L'Assistant de Support SalesBuzz utilise un modèle de vision multimodal <strong>Gemini</strong>. Vous pouvez :
+                  Avec l'Assistant de Support SalesBuzz Vous pouvez :
                 </p>
                 <ul className="text-xs text-slate-450 space-y-2 mt-3 list-disc pl-4 leading-relaxed">
                   <li>Lui décrire textuellement un symptôme de panne rencontrée.</li>
@@ -1305,7 +1465,8 @@ export default function App() {
                           : "bg-slate-950 border-slate-850 text-slate-200 rounded-tl-none"
                       }`}
                     >
-                      {msg.content}
+                      {renderMessageContent(msg.content)}
+                      {msg.role !== "user" && renderSolutionImagesForMessage(msg.content)}
 
                       {/* Display image inside speech bubble if attached */}
                       {msg.image && (
@@ -1385,7 +1546,7 @@ export default function App() {
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
                         placeholder="Décrivez l'erreur de SFA ou joignez sa photo..."
-                        className="grow px-4 py-3 bg-slate-900 border border-slate-800 focus:border-indigo-500 text-xs sm:text-sm text-white rounded-xl focus:outline-none placeholder-slate-500 transition-all font-medium whitespace-nowrap min-w-0"
+                        className="grow px-4 py-3 bg-slate-900 border border-slate-800 focus:border-indigo-500 text-xs sm:text-sm text-slate-100 rounded-xl focus:outline-none placeholder-slate-500 transition-all font-medium whitespace-nowrap min-w-0"
                       />
 
                       {/* Send client button */}
@@ -1416,7 +1577,7 @@ export default function App() {
                   <User className="h-8 w-8 text-indigo-400 stroke-[1.5]" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-white tracking-tight">Accès Collaborateur Requis</h3>
+                  <h3 className="text-xl font-bold text-slate-100 tracking-tight">Accès Collaborateur Requis</h3>
                   <p className="text-xs text-slate-400 mt-2 leading-relaxed">
                     L'enregistrement de nouvelles erreurs ou la rédaction de solutions dans la Base de Connaissances est exclusivement réservé aux membres de la <strong>Team Ilivik</strong>.
                   </p>
@@ -1434,7 +1595,7 @@ export default function App() {
                           placeholder="Votre Nom Complet..."
                           value={loginName}
                           onChange={(e) => setLoginName(e.target.value)}
-                          className="w-full bg-slate-950 text-white text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                          className="w-full bg-slate-950 text-slate-100 text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
                         />
                       </div>
                     )}
@@ -1446,7 +1607,7 @@ export default function App() {
                         placeholder="Nom d'utilisateur ou e-mail (@ilivik.com)..."
                         value={loginEmail}
                         onChange={(e) => setLoginEmail(e.target.value)}
-                        className="w-full bg-slate-950 text-white text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                        className="w-full bg-slate-950 text-slate-100 text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
                       />
                     </div>
                     <div className="flex flex-col gap-1 text-left">
@@ -1457,7 +1618,7 @@ export default function App() {
                         placeholder="Mot de passe confidentiel..."
                         value={loginPassword}
                         onChange={(e) => setLoginPassword(e.target.value)}
-                        className="w-full bg-slate-950 text-white text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                        className="w-full bg-slate-950 text-slate-100 text-xs font-semibold p-3 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
                       />
                     </div>
                     <button
@@ -1503,7 +1664,7 @@ export default function App() {
                   <AlertCircle className="h-8 w-8 text-red-400 stroke-[1.5]" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white tracking-tight">Privilèges Insuffisants</h3>
+                  <h3 className="text-base font-bold text-slate-100 tracking-tight">Privilèges Insuffisants</h3>
                   <p className="text-xs text-slate-400 mt-2 leading-relaxed">
                     Le Super-Administrateur a suspendu temporairement le droit d'ajouter ou archiver de nouvelles fiches de solutions de pannes pour votre profil d'utilisateur.
                   </p>
@@ -1516,7 +1677,7 @@ export default function App() {
                 <Plus className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-white">Documenter une Erreur & sa Solution</h3>
+                <h3 className="text-lg font-bold text-slate-100">Documenter une Erreur & sa Solution</h3>
                 <p className="text-xs text-slate-400">Éditez les étapes pas à pas pour enrichir la base de connaissances commune.</p>
               </div>
             </div>
@@ -1539,23 +1700,8 @@ export default function App() {
             <form onSubmit={handleAddErrorSubmit} className="flex flex-col gap-4">
               
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {/* Code input */}
-                <div className="sm:col-span-1 flex flex-col gap-1.5">
-                  <label htmlFor="err-code" className="text-xs font-semibold text-slate-300 flex items-center gap-1">
-                    <FileText className="h-3.5 w-3.5 text-slate-400" /> Code d'Erreur <span className="text-indigo-400 text-[10px] bg-indigo-950 px-1.5 border border-indigo-500/20 rounded">Optionnel</span>
-                  </label>
-                  <input
-                    id="err-code"
-                    type="text"
-                    placeholder="ex: SB-102"
-                    value={formCode}
-                    onChange={(e) => setFormCode(e.target.value)}
-                    className="px-3.5 py-2.5 bg-slate-950 text-white text-xs font-bold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all uppercase"
-                  />
-                </div>
-
                 {/* Title input */}
-                <div className="sm:col-span-2 flex flex-col gap-1.5">
+                <div className="sm:col-span-3 flex flex-col gap-1.5">
                   <label htmlFor="err-title" className="text-xs font-semibold text-slate-300">
                     Titre Court & Explicite <span className="text-red-400 font-bold">*</span>
                   </label>
@@ -1566,7 +1712,7 @@ export default function App() {
                     placeholder="ex: Imprimante thermique non détectée lors du reçu"
                     value={formTitle}
                     onChange={(e) => setFormTitle(e.target.value)}
-                    className="px-3.5 py-2.5 bg-slate-950 text-white text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all"
+                    className="px-3.5 py-2.5 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all"
                   />
                 </div>
               </div>
@@ -1583,35 +1729,44 @@ export default function App() {
                   placeholder="Qu'est-ce qui s'affiche ? Quand cela arrive-t-il ?"
                   value={formDescription}
                   onChange={(e) => setFormDescription(e.target.value)}
-                  className="px-3.5 py-2.5 bg-slate-950 text-white text-xs rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all leading-relaxed"
+                  className="px-3.5 py-2.5 bg-slate-950 text-slate-100 text-xs rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all leading-relaxed"
                 ></textarea>
               </div>
 
-              {/* Solution Input */}
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="err-solution" className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400 stroke-[2.5]" />
-                  Étapes de Résolution (Solution de l'astuce) <span className="text-indigo-400 text-[10px] bg-indigo-950 px-1.5 border border-indigo-500/20 rounded">Optionnel</span>
-                </label>
-                <textarea
-                  id="err-solution"
-                  rows={4}
-                  placeholder="Écrivez les étapes concrètes si connues, ou laissez vide pour ajouter la solution plus tard."
-                  value={formSolution}
-                  onChange={(e) => setFormSolution(e.target.value)}
-                  className="px-3.5 py-2.5 bg-slate-950 text-white text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all leading-relaxed"
-                ></textarea>
-              </div>
+              {/* App, Type, Category, Priority, Private Client */}
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 p-4 bg-slate-950/40 rounded-2xl border border-slate-850/60">
+                <div className="flex flex-col gap-1.55">
+                  <label htmlFor="err-application" className="text-xs font-semibold text-slate-300">Application</label>
+                  <select
+                    id="err-application"
+                    value={formApplication}
+                    onChange={(e) => setFormApplication(e.target.value)}
+                    className="px-3 py-2 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none cursor-pointer"
+                  >
+                    <option value="Salesbuzz">Salesbuzz</option>
+                    <option value="Saleswave">Saleswave</option>
+                    <option value="Routing">Routing</option>
+                    <option value="Other">Other</option>
+                  </select>
+                  {formApplication === "Other" && (
+                    <input
+                      type="text"
+                      required
+                      placeholder="Nom de l'application"
+                      value={formCustomApplication}
+                      onChange={(e) => setFormCustomApplication(e.target.value)}
+                      className="mt-1 px-3 py-2 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all w-full"
+                    />
+                  )}
+                </div>
 
-              {/* Type, Category, Priority, Private Client */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 p-4 bg-slate-950/40 rounded-2xl border border-slate-850/60">
                 <div className="flex flex-col gap-1.55">
                   <label htmlFor="err-type" className="text-xs font-semibold text-slate-300">Type d'erreur</label>
                   <select
                     id="err-type"
                     value={formErrorType}
                     onChange={(e) => setFormErrorType(e.target.value)}
-                    className="px-3 py-2 bg-slate-950 text-white text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none cursor-pointer"
+                    className="px-3 py-2 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none cursor-pointer"
                   >
                     <option value="frontoffice">Front Office</option>
                     <option value="backoffice">Back Office</option>
@@ -1624,7 +1779,7 @@ export default function App() {
                     id="err-category"
                     value={formErrorCategory}
                     onChange={(e) => setFormErrorCategory(e.target.value)}
-                    className="px-3 py-2 bg-slate-950 text-white text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none cursor-pointer"
+                    className="px-3 py-2 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none cursor-pointer"
                   >
                     <option value="manipulation">Manipulation</option>
                     <option value="error">Error</option>
@@ -1632,6 +1787,8 @@ export default function App() {
                     <option value="reports">Reports</option>
                     <option value="Synchronisation">Synchronisation</option>
                     <option value="impression">Impression</option>
+                    <option value="importation template">Importation template</option>
+                    <option value="importation journey plan">Importation journey plan</option>
                   </select>
                 </div>
 
@@ -1641,7 +1798,7 @@ export default function App() {
                     id="err-priority"
                     value={formErrorPriority}
                     onChange={(e) => setFormErrorPriority(e.target.value)}
-                    className="px-3 py-2 bg-slate-950 text-white text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none cursor-pointer"
+                    className="px-3 py-2 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none cursor-pointer"
                   >
                     <option value="level 03">level 03 (Non Bloquante 🟢)</option>
                     <option value="level 02">level 02 (Bloquante 🟡)</option>
@@ -1651,15 +1808,16 @@ export default function App() {
 
                 <div className="flex flex-col gap-1.55">
                   <label htmlFor="err-client" className="text-xs font-semibold text-slate-300 flex items-center gap-1">
-                    Client <span className="text-[9px] bg-indigo-950 text-indigo-400 font-extrabold px-1 rounded uppercase tracking-wider">🔒 Privé</span>
+                    Client <span className="text-red-400 font-bold">*</span> <span className="text-[9px] bg-indigo-950 text-indigo-400 font-extrabold px-1 rounded uppercase tracking-wider">🔒 Privé</span>
                   </label>
                   <input
                     id="err-client"
                     type="text"
+                    required
                     placeholder="ex: SalesBuzz CL"
                     value={formClient}
                     onChange={(e) => setFormClient(e.target.value)}
-                    className="px-3.5 py-2 bg-slate-950 text-white text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all"
+                    className="px-3.5 py-2 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all"
                   />
                 </div>
               </div>
@@ -1719,7 +1877,19 @@ export default function App() {
                     value={formAuthor}
                     onChange={(e) => setFormAuthor(e.target.value)}
                     placeholder="Hichem B."
-                    className="px-3.5 py-2.5 bg-slate-950 text-white text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all"
+                    className="px-3.5 py-2.5 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all"
+                  />
+                  <input
+                    id="form-cretedby"
+                    type="hidden"
+                    name="cretedby"
+                    value={firebaseUser?.email || ""}
+                  />
+                  <input
+                    id="form-createdby"
+                    type="hidden"
+                    name="createdBy"
+                    value={firebaseUser?.email || ""}
                   />
                 </div>
 
@@ -1745,11 +1915,64 @@ export default function App() {
                       value={newTagInput}
                       onChange={(e) => setNewTagInput(e.target.value)}
                       onKeyDown={addFormTag}
-                      className="bg-transparent border-0 ring-0 hover:bg-transparent focus:ring-0 focus:outline-none text-xs font-medium px-1 flex-1 py-0.5 min-w-[80px] text-white"
+                      className="bg-transparent border-0 ring-0 hover:bg-transparent focus:ring-0 focus:outline-none text-xs font-medium px-1 flex-1 py-0.5 min-w-[80px] text-slate-100"
                     />
                   </div>
                 </div>
 
+              </div>
+
+              {/* Solution Input */}
+              <div className="flex flex-col gap-1.5 mt-2 mb-2">
+                <label htmlFor="err-solution" className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400 stroke-[2.5]" />
+                  Étapes de Résolution (Solution de l'astuce) <span className="text-indigo-400 text-[10px] bg-indigo-950 px-1.5 border border-indigo-500/20 rounded">Optionnel</span>
+                </label>
+                <textarea
+                  id="err-solution"
+                  rows={4}
+                  placeholder="Écrivez les étapes concrètes si connues, ou laissez vide pour ajouter la solution plus tard."
+                  value={formSolution}
+                  onChange={(e) => setFormSolution(e.target.value)}
+                  className="px-3.5 py-2.5 bg-slate-950 text-slate-100 text-xs font-semibold rounded-lg border border-slate-850 focus:border-indigo-500/80 focus:outline-none transition-all leading-relaxed"
+                ></textarea>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 p-3 bg-emerald-950/20 border border-emerald-900/30 rounded-xl">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-slate-300">Capture d'écran de la solution</label>
+                    <label className="bg-slate-950 hover:bg-slate-900 border border-slate-850 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition-all gap-1 h-[92px]">
+                      <Upload className="h-4 w-4 text-emerald-400" />
+                      <span className="text-xs font-semibold text-slate-300">Optionnel</span>
+                      <input
+                        id="form-solution-screenshot-input"
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleFileChange(e, "solution")}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-semibold text-slate-500">Capture (Solution)</span>
+                    {formSolutionImage ? (
+                      <div className="relative rounded-xl border border-slate-800 overflow-hidden bg-slate-950 h-[92px]">
+                        <img src={formSolutionImage} className="w-full h-full object-contain" alt="Solution draft" />
+                        <button
+                          id="clear-form-solution-image"
+                          type="button"
+                          onClick={() => setFormSolutionImage("")}
+                          className="absolute right-2 top-2 p-1.5 bg-slate-900/80 rounded-full text-slate-200 hover:text-red-400"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="border border-dashed border-slate-800 rounded-xl h-[92px] bg-slate-950/40 flex items-center justify-center text-slate-600 text-[10px] text-center px-2">
+                        Aucune image ajoutée
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Action controller footer in card */}
@@ -1792,7 +2015,7 @@ export default function App() {
                   <Smartphone className="h-6 w-6" />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
                     Console SuperAdmin <span className="text-[10px] bg-amber-500/20 text-amber-400 font-extrabold px-2.5 py-0.5 rounded-full border border-amber-500/25 uppercase tracking-widest">Team Ilivik</span>
                   </h2>
                   <p className="text-xs text-slate-400 mt-0.5">Configurez l'interfaçage hybride mobile et modulez les droits d'accès de l'application sans coder.</p>
@@ -1813,7 +2036,7 @@ export default function App() {
                       <Layers className="h-4 w-4 text-indigo-450" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-extrabold text-white">Gestionnaire de permissions modulaire</h3>
+                      <h3 className="text-sm font-extrabold text-slate-100">Gestionnaire de permissions modulaire</h3>
                       <p className="text-[10px] text-slate-400 flex items-center gap-1">Activez/désactivez des pages ou fonctions pour chaque rôle</p>
                     </div>
                   </div>
@@ -1982,7 +2205,7 @@ export default function App() {
                       <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
                         <div className="flex flex-col">
                           <span className="text-xs font-semibold text-slate-200">Pièces jointes</span>
-                          <span className="text-[9px] text-slate-500">Autoriser le téléchargement direct</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'onglet Pièces jointes</span>
                         </div>
                         <input
                           type="checkbox"
@@ -1997,8 +2220,24 @@ export default function App() {
 
                       <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
                         <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Télécharger Fichiers</span>
+                          <span className="text-[9px] text-slate-500">Autoriser le téléchargement direct</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowDownloadAttachments}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowDownloadAttachments: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
                           <span className="text-xs font-semibold text-slate-200">Tableau de données</span>
-                          <span className="text-[9px] text-slate-500">Autoriser l'export Excel</span>
+                          <span className="text-[9px] text-slate-500">Accès au tableau et recherche</span>
                         </div>
                         <input
                           type="checkbox"
@@ -2006,6 +2245,102 @@ export default function App() {
                           onChange={(e) => setPermissionsConfig({
                             ...permissionsConfig,
                             ilivikUsers: { ...permissionsConfig.ilivikUsers, allowDatatable: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Actions sur le tableau</span>
+                          <span className="text-[9px] text-slate-500">Autoriser les modifications (Auteur)</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowDatatableActions}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowDatatableActions: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.ilivikUsers.allowDatatable}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Export Excel</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'exportation vers Excel</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowDatatableExportExcel}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowDatatableExportExcel: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.ilivikUsers.allowDatatable}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Export PDF</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'exportation vers PDF</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowDatatableExportPdf}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowDatatableExportPdf: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.ilivikUsers.allowDatatable}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Import Bulk</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'importation de masse (Excel)</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowDatatableImportBulk}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowDatatableImportBulk: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.ilivikUsers.allowDatatable}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Modèle d'importation</span>
+                          <span className="text-[9px] text-slate-500">Télécharger le gabarit d'import</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowDatatableImportTemplate}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowDatatableImportTemplate: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.ilivikUsers.allowDatatable}
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Statistiques Récentes</span>
+                          <span className="text-[9px] text-slate-500">Afficher les compteurs d'erreurs</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.ilivikUsers.allowStatsBlocks}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            ilivikUsers: { ...permissionsConfig.ilivikUsers, allowStatsBlocks: e.target.checked }
                           })}
                           className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
                         />
@@ -2172,7 +2507,7 @@ export default function App() {
                       <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
                         <div className="flex flex-col">
                           <span className="text-xs font-semibold text-slate-200">Pièces jointes</span>
-                          <span className="text-[9px] text-slate-500">Autoriser le téléchargement direct</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'onglet Pièces jointes</span>
                         </div>
                         <input
                           type="checkbox"
@@ -2187,8 +2522,24 @@ export default function App() {
 
                       <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
                         <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Télécharger Fichiers</span>
+                          <span className="text-[9px] text-slate-500">Autoriser le téléchargement direct</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowDownloadAttachments}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowDownloadAttachments: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
                           <span className="text-xs font-semibold text-slate-200">Tableau de données</span>
-                          <span className="text-[9px] text-slate-500">Autoriser l'export Excel</span>
+                          <span className="text-[9px] text-slate-500">Accès au tableau et recherche</span>
                         </div>
                         <input
                           type="checkbox"
@@ -2196,6 +2547,102 @@ export default function App() {
                           onChange={(e) => setPermissionsConfig({
                             ...permissionsConfig,
                             publicUser: { ...permissionsConfig.publicUser, allowDatatable: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Actions sur le tableau</span>
+                          <span className="text-[9px] text-slate-500">Autoriser les modifications (Auteur)</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowDatatableActions}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowDatatableActions: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.publicUser.allowDatatable}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Export Excel</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'exportation vers Excel</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowDatatableExportExcel}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowDatatableExportExcel: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.publicUser.allowDatatable}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Export PDF</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'exportation vers PDF</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowDatatableExportPdf}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowDatatableExportPdf: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.publicUser.allowDatatable}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Import Bulk</span>
+                          <span className="text-[9px] text-slate-500">Autoriser l'importation de masse (Excel)</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowDatatableImportBulk}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowDatatableImportBulk: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.publicUser.allowDatatable}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer ml-4 border-l-2 border-indigo-500/20">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Modèle d'importation</span>
+                          <span className="text-[9px] text-slate-500">Télécharger le gabarit d'import</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowDatatableImportTemplate}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowDatatableImportTemplate: e.target.checked }
+                          })}
+                          className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
+                          disabled={!permissionsConfig.publicUser.allowDatatable}
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-xl border border-slate-850 hover:bg-slate-900 transition-all cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-slate-200">Statistiques Récentes</span>
+                          <span className="text-[9px] text-slate-500">Afficher les compteurs d'erreurs</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={permissionsConfig.publicUser.allowStatsBlocks}
+                          onChange={(e) => setPermissionsConfig({
+                            ...permissionsConfig,
+                            publicUser: { ...permissionsConfig.publicUser, allowStatsBlocks: e.target.checked }
                           })}
                           className="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-800 focus:ring-indigo-500 cursor-pointer"
                         />
@@ -2259,7 +2706,7 @@ export default function App() {
               <section className="lg:col-span-5 bg-slate-900 border border-slate-850 rounded-3xl p-6 shadow-xl flex flex-col gap-4">
                 <div className="flex items-center gap-2 pb-3 border-b border-slate-805/80">
                   <Smartphone className="h-4 w-4 text-indigo-400" />
-                  <span className="text-sm font-extrabold text-white">Guide WebView Mobile</span>
+                  <span className="text-sm font-extrabold text-slate-100">Guide WebView Mobile</span>
                 </div>
                 
                 <p className="text-xs text-slate-300 leading-normal">
@@ -2305,7 +2752,7 @@ webView.load(myRequest)`}</pre>
                     <User className="h-4 w-4 text-indigo-400" />
                   </div>
                   <div>
-                    <h3 className="text-sm font-extrabold text-white">Contrôle d'Accès Collaborateurs & Comptes</h3>
+                    <h3 className="text-sm font-extrabold text-slate-100">Contrôle d'Accès Collaborateurs & Comptes</h3>
                     <p className="text-[10px] text-slate-400 font-semibold">Modifier les mots de passe, activer/désactiver des comptes, ou supprimer des accès</p>
                   </div>
                 </div>
@@ -2399,7 +2846,7 @@ webView.load(myRequest)`}</pre>
                         placeholder="ex: colab@ilivik.com"
                         value={userFormEmail}
                         onChange={(e) => setUserFormEmail(e.target.value)}
-                        className="px-3.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500/80 disabled:opacity-50"
+                        className="px-3.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-indigo-500/80 disabled:opacity-50"
                       />
                     </div>
 
@@ -2411,7 +2858,7 @@ webView.load(myRequest)`}</pre>
                         placeholder="ex: Jean Dupont"
                         value={userFormName}
                         onChange={(e) => setUserFormName(e.target.value)}
-                        className="px-3.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500/80"
+                        className="px-3.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-indigo-500/80"
                       />
                     </div>
 
@@ -2424,7 +2871,7 @@ webView.load(myRequest)`}</pre>
                         placeholder={isEditingUser ? "Nouveau mot de passe..." : "Mot de passe..."}
                         value={userFormPassword}
                         onChange={(e) => setUserFormPassword(e.target.value)}
-                        className="px-3.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500/80"
+                        className="px-3.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-indigo-500/80"
                       />
                     </div>
 
@@ -2434,7 +2881,7 @@ webView.load(myRequest)`}</pre>
                         <select
                           value={userFormRole}
                           onChange={(e) => setUserFormRole(e.target.value)}
-                          className="px-2.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500/80 cursor-pointer"
+                          className="px-2.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-indigo-500/80 cursor-pointer"
                         >
                           <option value="ilivikUsers">Membre Team</option>
                           <option value="publicUser">Visiteur Public</option>
@@ -2447,7 +2894,7 @@ webView.load(myRequest)`}</pre>
                         <select
                           value={userFormStatus}
                           onChange={(e) => setUserFormStatus(e.target.value as "active" | "disabled" | "pending")}
-                          className="px-2.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500/80 cursor-pointer"
+                          className="px-2.5 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-indigo-500/80 cursor-pointer"
                         >
                           <option value="active">Actif (Autorisé)</option>
                           <option value="pending">En attente (Pending)</option>
@@ -2618,12 +3065,21 @@ webView.load(myRequest)`}</pre>
 
         {/* TAB 4: ATTACHMENTS SPACE */}
         {activeTab === "attachments" && getPermission("allowAttachmentsSpace") && (
-          <AttachmentsSpace isSuperAdmin={isSuperAdmin} />
+          <AttachmentsSpace isSuperAdmin={isSuperAdmin} userEmail={firebaseUser?.email || ""} allowDownloadAttachments={getPermission("allowDownloadAttachments")} />
         )}
 
         {/* TAB 5: DATATABLE SPACE */}
         {activeTab === "datatable" && getPermission("allowDatatable") && (
-          <DatatableSpace errors={errors} isSuperAdmin={isSuperAdmin} />
+          <DatatableSpace
+            errors={errors}
+            isSuperAdmin={isSuperAdmin}
+            onEdit={(err) => handleSelectError(err)}
+            allowImportBulk={getPermission("allowDatatableImportBulk")}
+            allowExportPdf={getPermission("allowDatatableExportPdf")}
+            allowExportExcel={getPermission("allowDatatableExportExcel")}
+            allowImportTemplate={getPermission("allowDatatableImportTemplate")}
+            allowActions={getPermission("allowDatatableActions")}
+          />
         )}
 
       </main>
@@ -2646,121 +3102,133 @@ webView.load(myRequest)`}</pre>
                 <X className="h-5 w-5" />
               </button>
 
-              {/* Solution status toggle button strictly on top of the modal */}
-              <div className="flex justify-between items-center mb-4 pb-2.5 border-b border-slate-850">
-                <button
-                  id={`toggle-resolve-status-${viewingErrorDetail.id}`}
-                  onClick={async () => {
-                    const toggledStatus = !viewingErrorDetail.isResolved;
-                    const toggledResolvedAt = toggledStatus ? new Date().toISOString() : null;
+              {isLoggedIn && (
+                <>
+                  {/* Solution status toggle button strictly on top of the modal */}
+                  <div className="flex justify-between items-center mb-4 pb-2.5 border-b border-slate-850">
+                    <button
+                      id={`toggle-resolve-status-${viewingErrorDetail.id}`}
+                      onClick={async () => {
+                        const toggledStatus = !viewingErrorDetail.isResolved;
+                        const toggledResolvedAt = toggledStatus ? new Date().toISOString() : null;
 
-                    // Update error item on the server
-                    try {
-                      const res = await fetch(`/api/errors/${viewingErrorDetail.id}`, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          ...viewingErrorDetail,
-                          isResolved: toggledStatus,
-                          resolvedAt: toggledResolvedAt
-                        })
-                      });
-                      if (res.ok) {
-                        const updatedRecord = await res.json();
-                        setViewingErrorDetail(updatedRecord);
-                        setErrors(errors.map((e) => e.id === viewingErrorDetail.id ? updatedRecord : e));
-                      } else {
-                        alert("Impossible de modifier le statut. Connectez-vous d'abord.");
-                      }
-                    } catch (err) {
-                      console.error("Error setting resolution status:", err);
-                    }
-                  }}
-                  className={`px-3 py-1.5 text-xs font-black rounded-xl border transition-all flex items-center gap-1.5 shadow cursor-pointer ${
-                    viewingErrorDetail.isResolved 
-                      ? "bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/30 text-emerald-300"
-                      : "bg-red-950/80 hover:bg-red-900 border-red-500/30 text-red-300"
-                  }`}
-                >
-                  <span className={`w-2 h-2 rounded-full ${viewingErrorDetail.isResolved ? "bg-emerald-400" : "bg-red-450 animate-pulse"}`}></span>
-                  <span>{viewingErrorDetail.isResolved ? "Résolu ✓" : "Non Résolu ❌"}</span>
-                </button>
-                
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
-                  {viewingErrorDetail.errorCategory ? `#${viewingErrorDetail.errorCategory}` : "Fiche Info"}
-                </span>
-              </div>
-
-              <h3 className="text-xl font-extrabold text-white leading-tight mb-4">
-                {viewingErrorDetail.title}
-              </h3>
-
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 bg-slate-950/50 p-4 rounded-2xl border border-slate-850/60 text-xs text-slate-400 mb-5">
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[10px] uppercase text-slate-500 font-bold">Type d'erreur</span>
-                  <span className="font-extrabold text-slate-200 capitalize">
-                    {viewingErrorDetail.errorType === "frontoffice" ? "Front Office" : viewingErrorDetail.errorType || "Front Office"}
-                  </span>
-                </div>
-                
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[10px] uppercase text-slate-500 font-bold">Catégorie</span>
-                  <span className="font-extrabold text-indigo-300 capitalize">{viewingErrorDetail.errorCategory || "manipulation"}</span>
-                </div>
-
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[10px] uppercase text-slate-500 font-bold">Priorité</span>
-                  <span className={`font-extrabold flex items-center gap-1 ${
-                    viewingErrorDetail.errorPriority === "level 01" || viewingErrorDetail.errorPriority?.includes("01") 
-                      ? "text-red-400 font-black" 
-                      : viewingErrorDetail.errorPriority === "level 02" || viewingErrorDetail.errorPriority?.includes("02")
-                      ? "text-amber-400"
-                      : "text-emerald-400"
-                  }`}>
-                    {viewingErrorDetail.errorPriority === "level 01" ? "Level 01 (Must See 🚨)" :
-                     viewingErrorDetail.errorPriority === "level 02" ? "Level 02 (Bloquante ⚠️)" :
-                     "Level 03 (Non Bloquante 🟢)"}
-                  </span>
-                </div>
-
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[10px] uppercase text-slate-500 font-bold">Création</span>
-                  <span className="font-semibold text-slate-300">
-                    {new Date(viewingErrorDetail.createdAt).toLocaleDateString()}
-                  </span>
-                </div>
-
-                {viewingErrorDetail.isResolved && viewingErrorDetail.resolvedAt && (
-                  <div className="flex flex-col gap-0.5">
-                    <span className="text-[10px] uppercase text-slate-500 font-bold">Résolution</span>
-                    <span className="font-semibold text-emerald-400">
-                      {new Date(viewingErrorDetail.resolvedAt).toLocaleDateString()}
+                        // Update error item on the server
+                        try {
+                          const res = await fetch(`/api/errors/${viewingErrorDetail.id}`, {
+                            method: "PUT",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              ...viewingErrorDetail,
+                              isResolved: toggledStatus,
+                              resolvedAt: toggledResolvedAt
+                            })
+                          });
+                          if (res.ok) {
+                            const updatedRecord = await res.json();
+                            setViewingErrorDetail(updatedRecord);
+                            setErrors(errors.map((e) => e.id === viewingErrorDetail.id ? updatedRecord : e));
+                          } else {
+                            alert("Impossible de modifier le statut. Connectez-vous d'abord.");
+                          }
+                        } catch (err) {
+                          console.error("Error setting resolution status:", err);
+                        }
+                      }}
+                      className={`px-3 py-1.5 text-xs font-black rounded-xl border transition-all flex items-center gap-1.5 shadow cursor-pointer ${
+                        viewingErrorDetail.isResolved 
+                          ? "bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/30 text-emerald-300"
+                          : "bg-red-950/80 hover:bg-red-900 border-red-500/30 text-red-300"
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${viewingErrorDetail.isResolved ? "bg-emerald-400" : "bg-red-450 animate-pulse"}`}></span>
+                      <span>{viewingErrorDetail.isResolved ? "Résolu ✓" : "Non Résolu ❌"}</span>
+                    </button>
+                    
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                      {viewingErrorDetail.errorCategory ? `#${viewingErrorDetail.errorCategory}` : "Fiche Info"}
                     </span>
                   </div>
-                )}
 
-                {/* Private Section (Client & Creator) */}
-                <div className="flex flex-col gap-0.5 col-span-2 md:col-span-3 border-t border-slate-850/60 pt-2.5 mt-1">
-                  <span className="text-[9px] uppercase text-indigo-400 font-extrabold flex items-center gap-1">
-                    <Lock className="w-3 h-3 text-indigo-400" />
-                    Propriétés de Service (Équipe Ilivik - Privé)
-                  </span>
-                  <div className="grid grid-cols-2 gap-3 mt-1.5 text-[11px]">
-                    <div className="flex justify-between items-center py-1 border-b border-white/5">
-                      <span className="text-slate-500 font-medium">Client :</span>
-                      <span className="font-bold text-slate-200">
-                        {isLoggedIn ? (viewingErrorDetail.client || "Client Standard") : "🔒 Privé"}
+                  <h3 className="text-xl font-extrabold text-slate-100 leading-tight mb-4">
+                    {viewingErrorDetail.title}
+                  </h3>
+
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 bg-slate-950/50 p-4 rounded-2xl border border-slate-850/60 text-xs text-slate-400 mb-5">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[10px] uppercase text-slate-500 font-bold">Type d'erreur</span>
+                      <span className="font-extrabold text-slate-200 capitalize">
+                        {viewingErrorDetail.errorType === "frontoffice" ? "Front Office" : viewingErrorDetail.errorType || "Front Office"}
                       </span>
                     </div>
-                    <div className="flex justify-between items-center py-1 border-b border-white/5">
-                      <span className="text-slate-500 font-medium">Créé par :</span>
-                      <span className="font-bold text-slate-200">
-                        {isLoggedIn ? (viewingErrorDetail.author || "Team Ilivik") : "🔒 Privé"}
+                    
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[10px] uppercase text-slate-500 font-bold">Catégorie</span>
+                      <span className="font-extrabold text-indigo-300 capitalize">{viewingErrorDetail.errorCategory || "manipulation"}</span>
+                    </div>
+
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[10px] uppercase text-slate-500 font-bold">Priorité</span>
+                      <span className={`font-extrabold flex items-center gap-1 ${
+                        viewingErrorDetail.errorPriority === "level 01" || viewingErrorDetail.errorPriority?.includes("01") 
+                          ? "text-red-400 font-black" 
+                          : viewingErrorDetail.errorPriority === "level 02" || viewingErrorDetail.errorPriority?.includes("02")
+                          ? "text-amber-400"
+                          : "text-emerald-400"
+                      }`}>
+                        {viewingErrorDetail.errorPriority === "level 01" ? "Level 01 (Must See 🚨)" :
+                         viewingErrorDetail.errorPriority === "level 02" ? "Level 02 (Bloquante ⚠️)" :
+                         "Level 03 (Non Bloquante 🟢)"}
                       </span>
+                    </div>
+
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[10px] uppercase text-slate-500 font-bold">Création</span>
+                      <span className="font-semibold text-slate-300">
+                        {new Date(viewingErrorDetail.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+
+                    {viewingErrorDetail.isResolved && viewingErrorDetail.resolvedAt && (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[10px] uppercase text-slate-500 font-bold">Résolution</span>
+                        <span className="font-semibold text-emerald-400">
+                          {new Date(viewingErrorDetail.resolvedAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Private Section (Client & Creator) */}
+                    <div className="flex flex-col gap-0.5 col-span-2 md:col-span-3 border-t border-slate-850/60 pt-2.5 mt-1">
+                      <span className="text-[9px] uppercase text-indigo-400 font-extrabold flex items-center gap-1">
+                        <Lock className="w-3 h-3 text-indigo-400" />
+                        Propriétés de Service (Équipe Ilivik - Privé)
+                      </span>
+                      <div className="grid grid-cols-2 gap-3 mt-1.5 text-[11px]">
+                        <div className="flex justify-between items-center py-1 border-b border-white/5">
+                          <span className="text-slate-500 font-medium">Client :</span>
+                          <span className="font-bold text-slate-200">
+                            {isLoggedIn ? (viewingErrorDetail.client || "Client Standard") : "🔒 Privé"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center py-1 border-b border-white/5">
+                          <span className="text-slate-500 font-medium">Auteur déclaré :</span>
+                          <span className="font-bold text-slate-200">
+                            {isLoggedIn ? (viewingErrorDetail.author || "Team Ilivik") : "🔒 Privé"}
+                          </span>
+                        </div>
+                        {isLoggedIn && (viewingErrorDetail.cretedby || viewingErrorDetail.createdBy) && (
+                          <div className="flex justify-between items-center py-1 border-b border-white/5 col-span-2">
+                            <span className="text-indigo-400 font-medium">Tracé créateur (Email permanent) :</span>
+                            <span className="font-semibold text-indigo-300">
+                              {viewingErrorDetail.cretedby || viewingErrorDetail.createdBy}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
+                </>
+              )}
 
               <div className="space-y-4">
                 <div>
@@ -2784,20 +3252,34 @@ webView.load(myRequest)`}</pre>
                         value={solutionInput}
                         onChange={(e) => setSolutionInput(e.target.value)}
                       ></textarea>
-                      <div className="flex justify-end gap-2 text-xs">
-                        <button
-                          onClick={() => setIsEditingSolution(false)}
-                          className="px-3 py-2 text-slate-400 hover:bg-slate-900 rounded-lg"
-                        >
-                          Annuler
-                        </button>
-                        <button
-                          onClick={handleSaveSolution}
-                          disabled={isSubmitting}
-                          className="px-4 py-2 font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg flex items-center gap-1"
-                        >
-                          {isSubmitting ? "Sauvegarde..." : "Enregistrer la Solution"}
-                        </button>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-900/50 p-2 rounded-xl">
+                        <div className="flex items-center gap-2">
+                           <label className="bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-[10px] text-slate-300 cursor-pointer flex items-center gap-1 border border-slate-700">
+                             <Upload className="h-3.5 w-3.5" />
+                             {solutionImageInput ? "Changer" : "Ajouter une image"}
+                             <input type="file" accept="image/*" onChange={handleInlineSolutionFile} className="hidden" />
+                           </label>
+                           {solutionImageInput && (
+                              <button onClick={() => setSolutionImageInput("")} className="text-red-400 hover:text-red-300 text-[10px] flex items-center">
+                                <X className="h-3 w-3" />
+                              </button>
+                           )}
+                        </div>
+                        <div className="flex justify-end gap-2 text-xs w-full sm:w-auto">
+                          <button
+                            onClick={() => setIsEditingSolution(false)}
+                            className="px-3 py-2 text-slate-400 hover:bg-slate-900 rounded-lg"
+                          >
+                            Annuler
+                          </button>
+                          <button
+                            onClick={handleSaveSolution}
+                            disabled={isSubmitting}
+                            className="px-4 py-2 font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg flex items-center gap-1"
+                          >
+                            {isSubmitting ? "Sauvegarde..." : "Enregistrer la Solution"}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : viewingErrorDetail.solution && viewingErrorDetail.solution.trim() !== "" ? (
@@ -2825,9 +3307,17 @@ webView.load(myRequest)`}</pre>
                         </button>
                       )}
                       </h4>
-                      <div className="bg-emerald-500/5 border border-emerald-500/10 text-emerald-300 rounded-xl p-4 text-xs sm:text-sm leading-relaxed font-semibold whitespace-pre-line">
+                      <div className="bg-emerald-500/5 border border-emerald-500/10 text-emerald-300 rounded-xl p-4 text-xs sm:text-sm leading-relaxed font-semibold whitespace-pre-line mb-3">
                         {viewingErrorDetail.solution}
                       </div>
+                      {viewingErrorDetail.solutionImageUrl && (
+                        <div>
+                          <h4 className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider mb-1.5 opacity-80">Image de la Solution</h4>
+                         <div className="relative group max-h-[200px] rounded-xl overflow-hidden border border-emerald-900/30">
+                            <img src={viewingErrorDetail.solutionImageUrl} className="w-full object-contain max-h-[200px] bg-slate-950/50" alt="Solution Capture" />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="bg-amber-500/5 border border-amber-500/10 text-amber-300 rounded-2xl p-5 text-center flex flex-col items-center gap-2.5 shadow-inner">
@@ -2938,7 +3428,7 @@ webView.load(myRequest)`}</pre>
                   <User className="h-6 w-6 text-indigo-400" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Connexion Collaborateur</h3>
+                  <h3 className="text-lg font-bold text-slate-100">Connexion Collaborateur</h3>
                   <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
                     {authPurpose === "edit"
                       ? "La rédaction, modification de solutions ou l'enregistrement de fiches pannes est réservé aux techniciens et contributeurs de la Team Ilivik."
@@ -2958,7 +3448,7 @@ webView.load(myRequest)`}</pre>
                           placeholder="Votre Nom Complet..."
                           value={loginName}
                           onChange={(e) => setLoginName(e.target.value)}
-                          className="w-full bg-slate-950 text-white text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                          className="w-full bg-slate-950 text-slate-100 text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
                         />
                       </div>
                     )}
@@ -2970,7 +3460,7 @@ webView.load(myRequest)`}</pre>
                         placeholder="Nom d'utilisateur ou e-mail (@ilivik.com)..."
                         value={loginEmail}
                         onChange={(e) => setLoginEmail(e.target.value)}
-                        className="w-full bg-slate-950 text-white text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                        className="w-full bg-slate-950 text-slate-100 text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
                       />
                     </div>
                     <div className="flex flex-col gap-1 text-left">
@@ -2981,7 +3471,7 @@ webView.load(myRequest)`}</pre>
                         placeholder="Mot de passe confidentiel..."
                         value={loginPassword}
                         onChange={(e) => setLoginPassword(e.target.value)}
-                        className="w-full bg-slate-950 text-white text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
+                        className="w-full bg-slate-950 text-slate-100 text-xs font-semibold p-2.5 rounded-xl border border-slate-850 focus:border-indigo-500/80 focus:outline-none placeholder-slate-500"
                       />
                     </div>
                     <button

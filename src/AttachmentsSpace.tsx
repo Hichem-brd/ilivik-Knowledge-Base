@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { FileText, Download, AlertCircle, RefreshCw, Trophy } from "lucide-react";
-import { doc, getDoc, setDoc, updateDoc, increment } from "firebase/firestore";
-import { db } from "./firebase";
 
 interface DriveFile {
   id: string;
@@ -11,7 +9,7 @@ interface DriveFile {
   downloadCount?: number;
 }
 
-export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boolean }) {
+export default function AttachmentsSpace({ isSuperAdmin, userEmail, allowDownloadAttachments = true }: { isSuperAdmin: boolean; userEmail: string; allowDownloadAttachments?: boolean }) {
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,55 +20,72 @@ export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boole
 
   const fetchConfig = async () => {
     try {
-      const snap = await getDoc(doc(db, "config", "drive"));
-      if (snap.exists()) {
-        const id = snap.data().folderId;
+      const response = await fetch("/api/config/drive");
+      if (response.ok) {
+        const data = await response.json();
+        const id = data.folderId || "";
         setFolderId(id);
         return id;
       }
     } catch (err) {
-      console.error("Config fetch error", err);
+      console.log("Config fetch error", err);
     }
     return null;
   };
 
   const saveConfig = async () => {
+    if (!folderId || !folderId.trim()) {
+      alert("Veuillez saisir un ID de dossier valide.");
+      return;
+    }
     setSavingConfig(true);
     try {
-      await setDoc(doc(db, "config", "drive"), { folderId });
-      setIsConfiguring(false);
-      fetchFiles(folderId);
+      const response = await fetch("/api/config/drive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderId: folderId.trim(), requesterEmail: userEmail }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setIsConfiguring(false);
+        fetchFiles(folderId);
+        alert(data.message || "ID de dossier Google Drive enregistré avec succès !");
+      } else {
+        alert("Erreur: " + (data.error || "Échec de l'enregistrement de l'ID"));
+      }
     } catch (err: any) {
-      alert("Erreur: " + err.message);
+      alert("Erreur réseau: " + err.message);
     } finally {
       setSavingConfig(false);
     }
   };
 
-  const fetchFiles = async (fId: string) => {
-    if (!fId) return;
-    const token = (window as any).__GOOGLE_ACCESS_TOKEN__;
-    if (!token) {
-      setError("Veuillez vous connecter avec Google (Administrateur/Equipe) pour accéder aux pièces jointes du Drive.");
-      return;
-    }
-
+  const fetchFiles = async (fId?: string) => {
     setLoading(true);
     setError(null);
     try {
-      const query = encodeURIComponent(`'${fId}' in parents and mimeType='application/pdf' and trashed=false`);
-      const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,webViewLink,webContentLink)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
-      
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
+      const token = (window as any).__GOOGLE_ACCESS_TOKEN__ || "";
+      const queryParam = token ? `?token=${encodeURIComponent(token)}` : "";
+      const response = await fetch(`/api/drive/files${queryParam}`);
       if (response.ok) {
         const data = await response.json();
         
-        // Fetch download statistics 
-        const statsDoc = await getDoc(doc(db, "config", "downloads_stats"));
-        const stats = statsDoc.exists() ? statsDoc.data() : {};
+        if (data.error) {
+          setError(data.error);
+          setFiles([]);
+          return;
+        }
+
+        // Fetch download statistics from the backend proxy API
+        let stats: Record<string, number> = {};
+        try {
+          const statsRes = await fetch("/api/config/downloads_stats");
+          if (statsRes.ok) {
+            stats = await statsRes.json();
+          }
+        } catch (sErr) {
+          console.log("Failed to fetch download statistics:", sErr);
+        }
 
         const mergedFiles: DriveFile[] = (data.files || []).map((f: any) => ({
           ...f,
@@ -79,8 +94,7 @@ export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boole
 
         setFiles(mergedFiles);
       } else {
-        const errJson = await response.json();
-        setError(`Erreur d'accès Drive. Avez-vous la permission sur le dossier ?`);
+        setError("Impossible de charger les fichiers de la base de données. Veuillez actualiser ou réessayer.");
       }
     } catch (err: any) {
       setError("Erreur réseau: " + err.message);
@@ -91,14 +105,14 @@ export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boole
 
   const trackDownload = async (fileId: string) => {
     try {
-      const statsRef = doc(db, "config", "downloads_stats");
-      const snap = await getDoc(statsRef);
-      if (!snap.exists()) {
-        await setDoc(statsRef, { [fileId]: 1 });
+      const response = await fetch(`/api/config/downloads_stats/${fileId}`, {
+        method: "POST"
+      });
+      if (response.ok) {
+        setFiles(files.map(f => f.id === fileId ? { ...f, downloadCount: (f.downloadCount || 0) + 1 } : f));
       } else {
-        await updateDoc(statsRef, { [fileId]: increment(1) });
+        console.error("Failed to track download via API");
       }
-      setFiles(files.map(f => f.id === fileId ? { ...f, downloadCount: (f.downloadCount || 0) + 1 } : f));
     } catch (err) {
       console.error("Couldn't track download", err);
     }
@@ -107,7 +121,7 @@ export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boole
   // Initial load
   useEffect(() => {
     fetchConfig().then((id) => {
-      if (id) fetchFiles(id);
+      fetchFiles(id || "");
     });
   }, []);
 
@@ -130,7 +144,7 @@ export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boole
               placeholder="ex: 1A2B3C4D5E6F7G8H9I0J" 
               value={folderId}
               onChange={(e) => setFolderId(e.target.value)}
-              className="flex-grow bg-slate-950 border border-amber-500/30 text-white p-2.5 rounded-xl text-xs focus:outline-none focus:border-amber-500"
+              className="flex-grow bg-slate-950 border border-amber-500/30 text-slate-100 p-2.5 rounded-xl text-xs focus:outline-none focus:border-amber-500"
             />
             <button 
               onClick={saveConfig}
@@ -211,7 +225,7 @@ export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boole
               </div>
               <div className="flex items-center gap-2">
                 <a 
-                  href={file.webViewLink} 
+                  href={`/api/drive/download/${file.id}?name=${encodeURIComponent(file.name)}`}
                   target="_blank" 
                   rel="noreferrer"
                   onClick={() => trackDownload(file.id)}
@@ -219,8 +233,10 @@ export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boole
                 >
                   Aperçu
                 </a>
+                {allowDownloadAttachments && (
                 <a 
-                  href={file.webContentLink || file.webViewLink} 
+                  href={`/api/drive/download/${file.id}?name=${encodeURIComponent(file.name)}`}
+                  download={file.name}
                   target="_blank" 
                   rel="noreferrer"
                   onClick={() => trackDownload(file.id)}
@@ -229,6 +245,7 @@ export default function AttachmentsSpace({ isSuperAdmin }: { isSuperAdmin: boole
                   <Download className="h-3 w-3" />
                   <span className="hidden sm:inline">Télécharger</span>
                 </a>
+                )}
               </div>
             </div>
           ))}

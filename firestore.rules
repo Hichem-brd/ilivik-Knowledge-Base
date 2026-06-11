@@ -88,7 +88,9 @@ service cloud.firestore {
     // Match rules for config collection and permissions document
     match /config/{configId} {
       allow read: if true;
-      allow write: if configId == 'permissions' && isValidAppPermissionsConfig(incoming());
+      allow write: if (configId == 'permissions' && isValidAppPermissionsConfig(incoming()))
+                   || (configId == 'drive' && incoming().get('folderId', '') is string && incoming().get('folderId', '').size() <= 128)
+                   || (configId == 'downloads_stats');
     }
   }
 }

@@ -36,6 +36,14 @@
         "author": {
           "type": "string",
           "description": "Nom du collaborateur de la Team Ilivik ayant documenté le problème"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "E-mail de l'utilisateur ayant créé la fiche d'erreur"
+        },
+        "cretedby": {
+          "type": "string",
+          "description": "E-mail de l'utilisateur ayant créé la fiche d'erreur (format brut)"
         }
       },
       "required": ["title", "description", "createdAt", "author"]
@@ -65,6 +73,29 @@
         "publicUser": { "$ref": "RolePermissions" }
       },
       "required": ["ilivikUsers", "publicUser"]
+    },
+    "DriveConfig": {
+      "title": "DriveConfig",
+      "description": "Configuration du dossier Google Drive contenant les pièces jointes.",
+      "type": "object",
+      "properties": {
+        "folderId": {
+          "type": "string",
+          "description": "ID du dossier Google Drive."
+        }
+      },
+      "required": ["folderId"]
+    },
+    "DownloadsStats": {
+      "title": "DownloadsStats",
+      "description": "Statistiques de téléchargement de documents.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "object",
+          "description": "Dictionnaire associant l'ID d'un fichier à son nombre de téléchargements."
+        }
+      }
     }
   },
   "firestore": {
@@ -75,6 +106,14 @@
     "config/permissions": {
       "schema": "AppPermissionsConfig",
       "description": "Dynamic modular permissions config."
+    },
+    "config/drive": {
+      "schema": "DriveConfig",
+      "description": "Stocke l'ID du dossier contenant les fichiers PDF du Drive."
+    },
+    "config/downloads_stats": {
+      "schema": "DownloadsStats",
+      "description": "Stocke le compteur de téléchargement de chaque document."
     }
   }
 }

@@ -1,11 +1,9 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
-import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this database id */
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.addScope('https://www.googleapis.com/auth/drive.readonly');
@@ -60,11 +58,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 // Test connection on startup
 async function testConnection() {
   try {
-    await getDocFromServer(doc(db, "config", "permissions"));
-  } catch (error: any) {
-    if (error instanceof Error && error.message.includes("the client is offline")) {
-      console.error("Please check your Firebase configuration. You appear to be offline.");
+    const res = await fetch("/api/health");
+    if (!res.ok) {
+      console.warn("Express backend connection check failed.");
     }
+  } catch (error: any) {
+    console.log("Connectivité backend non disponible pour le moment.");
   }
 }
 testConnection();

@@ -5,15 +5,19 @@ export interface ErrorRecord {
   description: string;
   solution: string;
   imageUrl?: string;
+  solutionImageUrl?: string;
   tags: string[];
   createdAt: string;
   author: string;
+  application?: string;
   errorType?: string; // backoffice, front office
-  errorCategory?: string; // manipulation, error, navigateur, reports, Synchronisation, impression
+  errorCategory?: string; // manipulation, error, navigateur, reports, Synchronisation, impression, importation template, importation journey plan
   errorPriority?: string; // level 01, level 02, level 03
   client?: string;
   isResolved?: boolean;
   resolvedAt?: string | null;
+  createdBy?: string;
+  cretedby?: string;
 }
 
 export interface ChatMessage {
@@ -37,6 +41,13 @@ export interface RolePermissions {
   allowRecentErrors: boolean;
   allowAttachmentsSpace?: boolean;
   allowDatatable?: boolean;
+  allowStatsBlocks?: boolean;
+  allowDownloadAttachments?: boolean;
+  allowDatatableImportBulk?: boolean;
+  allowDatatableExportPdf?: boolean;
+  allowDatatableExportExcel?: boolean;
+  allowDatatableImportTemplate?: boolean;
+  allowDatatableActions?: boolean;
 }
 
 export interface AppPermissionsConfig {

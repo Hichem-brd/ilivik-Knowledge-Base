@@ -4,13 +4,97 @@
 @theme {
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-slate-950: var(--slate-950);
+  --color-slate-905: var(--slate-905);
+  --color-slate-900: var(--slate-900);
+  --color-slate-850: var(--slate-850);
+  --color-slate-800: var(--slate-800);
+  --color-slate-700: var(--slate-700);
+  --color-slate-500: var(--slate-500);
+  --color-slate-450: var(--slate-450);
+  --color-slate-400: var(--slate-400);
+  --color-slate-350: var(--slate-350);
+  --color-slate-300: var(--slate-300);
+  --color-slate-200: var(--slate-200);
+  --color-slate-100: var(--slate-100);
+  --color-slate-50: var(--slate-50);
+
+  --color-indigo-950: var(--indigo-950);
+  --color-indigo-900: var(--indigo-900);
+  --color-indigo-500: var(--indigo-500);
+  --color-indigo-450: var(--indigo-450);
+  --color-indigo-350: var(--indigo-350);
+  --color-indigo-300: var(--indigo-300);
+
+  --color-emerald-450: var(--emerald-450);
+  --color-amber-450: var(--amber-450);
+  --color-red-450: var(--red-450);
+}
+
+:root {
+  --slate-950: #0a0f1d;
+  --slate-905: #0e1626;
+  --slate-900: #0f172a;
+  --slate-850: #141f32;
+  --slate-800: #1e293b;
+  --slate-700: #334155;
+  --slate-500: #64748b;
+  --slate-450: #7e8c9f;
+  --slate-400: #94a3b8;
+  --slate-350: #b0c2de;
+  --slate-300: #cbd5e1;
+  --slate-200: #e2e8f0;
+  --slate-100: #f1f5f9;
+  --slate-50: #f8fafc;
+
+  --indigo-950: #0c0f24;
+  --indigo-900: #141b4d;
+  --indigo-500: #6366f1;
+  --indigo-450: #7583f7;
+  --indigo-350: #a0adfc;
+  --indigo-300: #c7d2fe;
+
+  --emerald-450: #2ecc87;
+  --amber-450: #f3ae21;
+  --red-450: #ec3a3a;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --slate-950: #f1f5f9;
+    --slate-905: #e2e8f0;
+    --slate-900: #ffffff;
+    --slate-850: #e2e8f0;
+    --slate-800: #cbd5e1;
+    --slate-700: #94a3b8;
+    --slate-500: #64748b;
+    --slate-450: #475569;
+    --slate-400: #334155;
+    --slate-350: #1e293b;
+    --slate-300: #0f172a;
+    --slate-200: #0a0f1d;
+    --slate-100: #111827;
+    --slate-50: #030712;
+
+    --indigo-950: #e0e7ff;
+    --indigo-900: #eef2ff;
+    --indigo-500: #4f46e5;
+    --indigo-450: #4338ca;
+    --indigo-350: #312e81;
+    --indigo-300: #1e1b4b;
+
+    --emerald-450: #10b981;
+    --amber-450: #f59e0b;
+    --red-450: #ef4444;
+  }
 }
 
 /* Custom styles and smooth animations */
 body {
   font-family: var(--font-sans);
-  background-color: #0f172a; /* Slate 900 */
-  color: #f1f5f9; /* Slate 100 */
+  background-color: var(--slate-950);
+  color: var(--slate-100);
 }
 
 /* Hide scrollbars for aesthetic panels but keep functionality */
