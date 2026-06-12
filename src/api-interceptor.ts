@@ -1,5 +1,9 @@
 // src/api-interceptor.ts
-const BACKEND_URL = "https://ais-pre-b7hbsymvjz46yaiaof42gv-893408826438.europe-west2.run.app";
+
+const PRE_URL = "https://ais-pre-b7hbsymvjz46yaiaof42gv-893408826438.europe-west2.run.app";
+const DEV_URL = "https://ais-dev-b7hbsymvjz46yaiaof42gv-893408826438.europe-west2.run.app";
+
+let activeBackendUrl = PRE_URL; // Default to pre-view production backend
 
 if (typeof window !== "undefined") {
   const isCloudRun = window.location.hostname.endsWith(".run.app");
@@ -8,9 +12,40 @@ if (typeof window !== "undefined") {
                        window.location.hostname.startsWith("192.168.");
 
   if (!isCloudRun && !isLocalhost) {
-    console.log("[Ilivik Hub] Custom domain detected. Intercepting and routing API requests to Cloud Run backend:", BACKEND_URL);
-    const originalFetch = window.fetch;
+    console.log("[Ilivik Hub] Custom domain detected. Intercepting and routing API requests.");
     
+    const originalFetch = window.fetch;
+
+    // Detect responsive backend server dynamically
+    const selectActiveBackend = async () => {
+      const candidates = [PRE_URL, DEV_URL];
+      for (const candidate of candidates) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 2500);
+          
+          const res = await originalFetch(candidate + "/api/health", { 
+            method: "GET",
+            signal: controller.signal,
+            headers: { "Accept": "application/json" }
+          });
+          
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            activeBackendUrl = candidate;
+            console.log("[Ilivik Hub] Dynamic Backend Selection: Connected successfully to active endpoint:", candidate);
+            return;
+          }
+        } catch (e) {
+          console.warn(`[Ilivik Hub] Endpoint check failed for ${candidate}:`, e);
+        }
+      }
+      console.warn("[Ilivik Hub] No backend endpoints responded to connection validation. Using default fallback:", activeBackendUrl);
+    };
+
+    selectActiveBackend();
+
+    // Intercept standard fetch operations
     window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
       let urlStr = "";
       if (typeof input === "string") {
@@ -22,14 +57,15 @@ if (typeof window !== "undefined") {
       }
 
       if (urlStr.startsWith("/api/")) {
-        const rewrittenUrl = BACKEND_URL + urlStr;
+        const rewrittenUrl = activeBackendUrl + urlStr;
+        console.log(`[Ilivik Hub] Proxying API call to active server: ${rewrittenUrl}`);
+        
         if (typeof input === "string") {
           return originalFetch(rewrittenUrl, init);
         } else if (input instanceof URL) {
           return originalFetch(new URL(rewrittenUrl), init);
         } else {
           try {
-            // Recreate fetch request for standard Request object if passed
             const headers = init?.headers || (input as Request).headers;
             const method = init?.method || (input as Request).method;
             const body = init?.body || (input as any).body;
