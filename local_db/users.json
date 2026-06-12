@@ -1,0 +1,26 @@
+{
+  "hichem.b@ilivik.com": {
+    "name": "Hichem Bourada",
+    "email": "hichem.b@ilivik.com",
+    "password": "Alger1998@#2026",
+    "status": "active",
+    "role": "ilivikUsers",
+    "createdAt": "2026-06-04T15:36:22.621Z"
+  },
+  "contact@ilivik.com": {
+    "name": "Contact",
+    "email": "contact@ilivik.com",
+    "password": "Alger2020",
+    "status": "active",
+    "role": "ilivikUsers",
+    "createdAt": "2026-06-04T16:12:11.855Z"
+  },
+  "test@ilivik.com": {
+    "name": "Test User",
+    "email": "test@ilivik.com",
+    "password": "testpassword",
+    "status": "pending",
+    "role": "ilivikUsers",
+    "createdAt": "2026-06-11T23:09:05.752Z"
+  }
+}

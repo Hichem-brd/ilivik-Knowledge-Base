@@ -35,6 +35,24 @@ import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser, Goo
 import AttachmentsSpace from "./AttachmentsSpace";
 import DatatableSpace from "./DatatableSpace";
 
+// Helper to safely parse JSON or return clear textual description (preventing HTML Unexpected token '<' errors)
+async function parseResponseGracefully(response: Response, fallbackError: string): Promise<any> {
+  const text = await response.text();
+  try {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      return JSON.parse(text);
+    }
+  } catch (e) {
+    // Ignore and fallback to text snippet
+  }
+  
+  if (text && text.trim().startsWith("<")) {
+    return { error: `${fallbackError} (Status: ${response.status}). Le serveur a renvoyé un document de type HTML au lieu de JSON.` };
+  }
+  return { error: text || fallbackError };
+}
+
 export default function App() {
   // Navigation & View state
   const [activeTab, setActiveTab] = useState<"catalog" | "chat" | "add" | "attachments" | "datatable" | "webview">("catalog");
@@ -244,11 +262,12 @@ export default function App() {
       });
 
       if (response.ok) {
-        setErrors(errors.map((e) => e.id === viewingErrorDetail.id ? updatedRecord : e));
-        setViewingErrorDetail(updatedRecord);
+        const savedRecord = await parseResponseGracefully(response, "Erreur");
+        setErrors(errors.map((e) => e.id === viewingErrorDetail.id ? savedRecord : e));
+        setViewingErrorDetail(savedRecord);
         setIsEditingSolution(false);
       } else {
-        const errJson = await response.json();
+        const errJson = await parseResponseGracefully(response, "Une erreur est survenue lors de l'enregistrement de la solution.");
         alert(errJson.error || "Une erreur est survenue lors de l'enregistrement de la solution.");
       }
     } catch (err) {
@@ -294,7 +313,7 @@ export default function App() {
             });
 
             if (!syncResponse.ok) {
-              const errData = await syncResponse.json();
+              const errData = await parseResponseGracefully(syncResponse, "Échec de synchronisation de session.");
               setLoginError(errData.error || "Échec de synchronisation de session.");
               setAuthPurpose("general");
               setShowAuthModal(true);
@@ -303,7 +322,7 @@ export default function App() {
               return;
             }
 
-            const syncResult = await syncResponse.json();
+            const syncResult = await parseResponseGracefully(syncResponse, "Échec de décodage de session.");
             const userData = syncResult.user || {};
 
             if (userData.status === "pending") {
@@ -545,7 +564,7 @@ export default function App() {
           setLoginName("");
           setIsSignUp(false);
         } else {
-          const errData = await response.json();
+          const errData = await parseResponseGracefully(response, "Erreur lors de l'inscription.");
           setLoginError(errData.error || "Erreur lors de l'inscription.");
         }
       } else {
@@ -556,7 +575,7 @@ export default function App() {
         });
 
         if (response.ok) {
-          const data = await response.json();
+          const data = await parseResponseGracefully(response, "Erreur de connexion.");
           const customUser = {
             email: data.email,
             displayName: data.name,
@@ -573,7 +592,7 @@ export default function App() {
           setLoginPassword("");
           setShowAuthModal(false);
         } else {
-          const errData = await response.json();
+          const errData = await parseResponseGracefully(response, "E-mail ou mot de passe incorrect.");
           setLoginError(errData.error || "E-mail ou mot de passe incorrect.");
         }
       }
@@ -815,7 +834,7 @@ export default function App() {
           setSubmitStatus(null);
         }, 1500);
       } else {
-        const errorData = await response.json();
+        const errorData = await parseResponseGracefully(response, "Une erreur est survenue lors de l'enregistrement.");
         setSubmitStatus({ success: false, message: errorData.error || "Une erreur est survenue lors de l'enregistrement." });
       }
     } catch (err: any) {

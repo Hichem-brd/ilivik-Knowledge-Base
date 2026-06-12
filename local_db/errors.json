@@ -1,5 +1,26 @@
 [
   {
+    "id": "SB_err_1781219373183_8ui069pp3",
+    "application": "Salesbuzz",
+    "title": "Test connection issue",
+    "errorCode": "TEST-001",
+    "description": "This is a test description for verifying Firestore/local DB.",
+    "solution": "",
+    "imageUrl": "",
+    "solutionImageUrl": "",
+    "tags": [],
+    "createdAt": "2026-06-11T23:09:33.183Z",
+    "author": "Team Ilivik Membre",
+    "errorType": "frontoffice",
+    "errorCategory": "manipulation",
+    "errorPriority": "level 03",
+    "client": "Test Client Ltd",
+    "isResolved": false,
+    "resolvedAt": null,
+    "createdBy": "",
+    "cretedby": ""
+  },
+  {
     "id": "err_seed_3",
     "title": "Géolocalisation requise pour ouvrir la fiche client (GPS Bloqué)",
     "errorCode": "SB-309",
